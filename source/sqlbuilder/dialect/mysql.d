@@ -325,15 +325,22 @@ version(Have_mysql_native)
             auto colNames = seq.colNames;
             // have to wrap this in a function, because otherwise, I
             // get multiple defined labels.
-            void handleType(T, size_t idx)()
+
+            foreach(idx, T; q.RowTypes)
             {
-                static assert(!isMysqlPrimitive!T);
-                static if(isInstanceOf!(Nullable, T))
+                static if(isMysqlPrimitive!T)
                 {
-                    handleType!(typeof(T.init.get()), idx)();
+                    assert(colIdx < colNames.length);
+                    result.colIds[idx][0] = colIdx;
+                    ++colIdx;
                 }
                 else
-                {
+                () { // lambda because of the labels
+                    static assert(!isMysqlPrimitive!T);
+                    static if(isInstanceOf!(Nullable, T))
+                        alias realT = typeof(T.init.get());
+                    else
+                        alias realT = T;
                     bool objEndFound = false;
                     result.colIds[idx][] = size_t.max;
 objLoop:
@@ -346,9 +353,9 @@ objSwitch:
                             ++colIdx;
                             break objLoop;
 
-                            static foreach(fnum, fname; columnFieldNames!T)
+                            static foreach(fnum, fname; columnFieldNames!realT)
                             {
-                            case getColumnName!(__traits(getMember, T, fname)):
+                            case getColumnName!(__traits(getMember, realT, fname)):
                                 result.colIds[idx][fnum] = colIdx;
                                 break objSwitch;
                             }
@@ -360,21 +367,7 @@ objSwitch:
                     }
 
                     // TODO: check for required fields?
-                }
-            }
-
-            foreach(idx, T; q.RowTypes)
-            {
-                static if(isMysqlPrimitive!T)
-                {
-                    assert(colIdx < colNames.length);
-                    result.colIds[idx][0] = colIdx;
-                    ++colIdx;
-                }
-                else
-                {
-                    handleType!(T, idx);
-                }
+                } ();
             }
 
             result.loadItem();
@@ -397,7 +390,7 @@ objSwitch:
         conn.exec("INSERT INTO `author` (firstName, lastName) VALUES ('Steven', 'Schveighoffer'), ('Andrei', 'Alexandrescu')");
         conn.exec("INSERT INTO `book` (name, auth_id) VALUES ('This Module', 1), ('The D Programming Language', 2), ('Modern C++ Design', 2)");
         auto ds = DataSet!Author();
-        foreach(auth, book; conn.fetch(select!string(ds.all, ds.books.title).where(ds.lastName, " = ", "Alexandrescu".param)))
+        foreach(auth, book; conn.fetch(select!string(ds.all, ds.books.all).where(ds.lastName, " = ", "Alexandrescu".param)))
         {
             import std.stdio;
             writeln("author: ", auth, ", book: ", book);
