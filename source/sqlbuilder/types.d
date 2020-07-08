@@ -1,4 +1,5 @@
 module sqlbuilder.types;
+import sqlbuilder.traits;
 
 enum Spec : char
 {
@@ -6,6 +7,7 @@ enum Spec : char
     id = 'i',
     param = 'p',
     join = 'j',
+    objend = 'o', // denotes the end of an object
 }
 
 enum joinSpec = "\\" ~ Spec.join;
@@ -148,11 +150,18 @@ struct Query(Item, RowT...)
 }
 
 // UFCS method to fetch all the parameters from the given item.
-auto params(Item)(Query!Item q) if (!is(Item == void))
+auto params(QP...)(Query!QP q)
 {
-    import std.range : chain;
-    import std.algorithm : map, joiner;
-    return chain(q.fields.params, q.conditions.params, q.joins.params, q.orders.params);
+    static if(is(q.ItemType == void))
+    {
+        import std.range : only;
+        return only();
+    }
+    else
+    {
+        import std.range : chain;
+        return chain(q.fields.params, q.conditions.params, q.joins.params, q.orders.params);
+    }
 }
 
 struct ColumnDef(T)

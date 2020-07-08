@@ -54,12 +54,17 @@ template DataSet(T)
 
 struct DataSet(T, alias core)
 {
+    enum anyNull = core.dependencies.length != 0;
     @property auto opDispatch(string item)() if (isField!(T, item))
     {
         // This is a column of the row, so just build the correct column definition.
-        import std.format;
-        static col = makeColumnDef!(typeof(__traits(getMember, T, item)))
-            (core, core.as, getColumnName!(__traits(getMember, T, item)));
+        import std.typecons : Nullable;
+        static if(anyNull)
+            alias X = Nullable!(typeof(__traits(getMember, T, item)));
+        else
+            alias X = typeof(__traits(getMember, T, item));
+        static col = makeColumnDef!(X) (core, core.as,
+                        getColumnName!(__traits(getMember, T, item)));
         return col;
     }
 
@@ -75,9 +80,15 @@ struct DataSet(T, alias core)
     }
 
     // shortcut for all columns
-    @property ColumnDef!T all()
+    @property auto all()
     {
-        static col = ColumnDef!T(core, ExprString(core.as.makeSpec(Spec.id), ".*"));
+        import std.typecons : Nullable;
+        static if(anyNull)
+            alias X = Nullable!T;
+        else
+            alias X = T;
+        static col = ColumnDef!X(core, ExprString(core.as.makeSpec(Spec.id), ".*",
+                                                  makeSpec("", Spec.objend)));
         return col;
     }
 }
@@ -96,7 +107,7 @@ version(unittest)
     static struct book
     {
         @primaryKey @autoIncrement int id;
-        @unique @colName("name") string title;
+        @colName("name") string title;
         @manyToOne!Author("author") @colName("auth_id") int author_id;
     }
 }
@@ -111,7 +122,7 @@ unittest
     DataSet!(Author) ds;
     with(ds)
     {
-        auto q = select!Variant().where(lastName, " = ", "Alexandrescu".param).select(all, books.title).orderBy(ds.books.title);
+        auto q = select!Variant().where(lastName, " = ", "Alexandrescu".param).select(all, opDispatch!("books").title).orderBy(ds.opDispatch!("books").title);
         writeln(q.sql);
         writeln(q.params);
     }
@@ -124,7 +135,7 @@ unittest
     {
         Nullable!string s;
         auto q = select!Variant(all, author.books.title.as("other_book_title")).where(author.lastName, " = ", s.param);
-        pragma(msg, q.RowTypes);
+        //pragma(msg, q.RowTypes);
         writeln(q.sql);
         writeln(q.params);
 
