@@ -3,7 +3,65 @@ public import sqlbuilder.dialect.common;
 import sqlbuilder.types;
 import sqlbuilder.traits;
 
-string sql(bool includeObjectSeparators = false, QP...)(ref Query!(QP) q)
+private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, App)(ref App app, ExprString expr)
+{
+    foreach(x; expr.data)
+        sqlPut!(includeObjectSeparators, includeTableQualifiers)(app, x);
+}
+
+private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, App)(ref App app, string x)
+{
+    import std.range : put;
+    with(Spec) switch(getSpec(x))
+    {
+    case id:
+        put(app, '`');
+        put(app, x[2 .. $]);
+        put(app, '`');
+        break;
+    case tableid:
+        static if(includeTableQualifiers)
+        {
+            put(app, '`');
+            put(app, x[2 .. $]);
+            put(app, "`.");
+        }
+        break;
+    case join: // TODO: implement other joins
+        put(app, " LEFT JOIN ");
+        break;
+    case param:
+        put(app, '?');
+        break;
+    case none:
+        put(app, x);
+        break;
+    case objend:
+        static if(includeObjectSeparators)
+            put(app, ", 1 AS `_objend`");
+        break;
+    default:
+        throw new Exception("Unknown spec in: " ~ x);
+    }
+}
+
+auto params(T)(T t)
+{
+    static if(isQuery!T)
+    {
+        return paramsImpl!("fields", "joins", "conditions", "orders")(t);
+    }
+    else static if(is(T : Insert!P, P))
+    {
+        return paramsImpl!("colNames", "colValues")(t);
+    }
+    else static if(is(T : Update!P, P))
+    {
+        return paramsImpl!("joins", "settings", "conditions")(t);
+    }
+}
+
+string sql(bool includeObjectSeparators = false, QP...)(Query!(QP) q)
 {
     import std.array : Appender;
     import std.range : put;
@@ -17,32 +75,7 @@ string sql(bool includeObjectSeparators = false, QP...)(ref Query!(QP) q)
         if(item.expr)
         {
             put(app, prefix);
-            foreach(x; item.expr.data)
-            {
-                with(Spec) switch(getSpec(x))
-                {
-                case id:
-                    put(app, '`');
-                    put(app, x[2 .. $]);
-                    put(app, '`');
-                    break;
-                case join: // TODO: implement other joins
-                    put(app, " LEFT JOIN ");
-                    break;
-                case param:
-                    put(app, '?');
-                    break;
-                case none:
-                    put(app, x);
-                    break;
-                case objend:
-                    static if(includeObjectSeparators)
-                        put(app, ", 1 as `_objend`");
-                    break;
-                default:
-                    throw new Exception("Unknown spec in: " ~ x);
-                }
-            }
+            sqlPut!(includeObjectSeparators, true)(app, item.expr);
         }
     }
 
@@ -54,6 +87,55 @@ string sql(bool includeObjectSeparators = false, QP...)(ref Query!(QP) q)
     addFragment(q.conditions, " WHERE ");
     // ORDER BY
     addFragment(q.orders, " ORDER BY ");
+
+    return app.data;
+}
+
+string sql(Item)(Insert!Item ins)
+{
+    import std.array : Appender;
+    import std.range : put;
+    Appender!string app;
+    assert(ins.tableid.length);
+    assert(ins.colNames.expr);
+    assert(ins.colValues.expr);
+
+    put(app, "INSERT INTO `");
+    put(app, ins.tableid);
+    put(app, "` (");
+    sqlPut!(false, false)(app, ins.colNames.expr);
+    put(app, ") VALUES (");
+    sqlPut!(false, false)(app, ins.colValues.expr);
+    put(app, ")");
+
+    return app.data;
+}
+
+string sql(Item)(Update!Item upd)
+{
+    // MySQL is quite forgiving, so just include everything as it is written.
+    import std.array : Appender;
+    import std.range : put;
+    Appender!string app;
+    assert(upd.settings.expr);
+    assert(upd.joins.expr);
+
+    // add a set of fragments given the prefix and the separator
+    void addFragment(SQLFragment!(upd.ItemType) item, string prefix)
+    {
+        if(item.expr)
+        {
+            put(app, prefix);
+            sqlPut!(false, true)(app, item.expr);
+        }
+    }
+
+    // fields
+    addFragment(upd.joins, "UPDATE ");
+    // joins
+    addFragment(upd.settings, " SET ");
+    // CONDITIONS
+    addFragment(upd.conditions, " WHERE ");
 
     return app.data;
 }
@@ -81,9 +163,6 @@ private alias _typeMappings = AliasSeq!(
     DateTime, "DATETIME",
     TimeOfDay, "TIME",
 );
-
-
-                            
 
 // match the D type to a specific MySQL type
 template getFieldType(T)
@@ -375,6 +454,46 @@ objSwitch:
         }
     }
 
+    // returns the rows affected
+    long perform(Q)(Connection conn, Q stmt) if(is(Q : Insert!P, P) ||
+                                                is(Q : Update!P, P))
+    {
+        import mysql.commands;
+
+        if(stmt.params.empty)
+        {
+            return conn.exec(stmt.sql);
+        }
+        else
+        {
+            import std.range : enumerate;
+            auto p = conn.prepare(stmt.sql);
+            foreach(idx, arg; stmt.params.enumerate)
+                p.setArg(idx, arg);
+            return conn.exec(p);
+        }
+    }
+
+    T create(T)(Connection conn, T blueprint)
+    {
+        import mysql.commands;
+        import std.traits;
+        import sqlbuilder.uda;
+
+        // use insert to create it
+        auto ins = insert!Variant(blueprint);
+        auto rowsAffected = conn.perform(ins);
+        // check for an autoInc field
+        foreach(fname; __traits(allMembers, T))
+            static if(isField!(T, fname) &&
+                      hasUDA!(__traits(getMember, T, fname), autoIncrement))
+            {
+                __traits(getMember, blueprint, fname) =
+                     cast(typeof(__traits(getMember, blueprint, fname)))conn.lastInsertID;
+            }
+        return blueprint;
+    }
+
     unittest
     {
         import sqlbuilder.dataset;
@@ -387,12 +506,18 @@ objSwitch:
         conn.exec(createTableSql!Author);
         conn.exec(dropTableSql!book);
         conn.exec(createTableSql!book);
-        conn.exec("INSERT INTO `author` (firstName, lastName) VALUES ('Steven', 'Schveighoffer'), ('Andrei', 'Alexandrescu')");
-        conn.exec("INSERT INTO `book` (name, auth_id) VALUES ('This Module', 1), ('The D Programming Language', 2), ('Modern C++ Design', 2)");
+        import std.stdio;
+        auto steve = conn.create(Author("Steven", "Schveighoffer"));
+        auto andrei = conn.create(Author("Andrei", "Alexandrescu"));
+        conn.create(book("This Module", steve.id));
+        conn.create(book("The D Programming Language", andrei.id));
+        auto book3 = conn.create(book("Modern C++ design", andrei.id));
+        assert(!conn.perform(update!Variant(book3)));
+        book3.title = "Not so Modern C++ Design";
+        assert(conn.perform(update!Variant(book3)));
         auto ds = DataSet!Author();
         foreach(auth, book; conn.fetch(select!string(ds.all, ds.books.all).where(ds.lastName, " = ", "Alexandrescu".param)))
         {
-            import std.stdio;
             writeln("author: ", auth, ", book: ", book);
         }
     }

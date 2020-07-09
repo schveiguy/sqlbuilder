@@ -5,6 +5,7 @@ enum Spec : char
 {
     none = '\0',
     id = 'i',
+    tableid = 't',
     param = 'p',
     join = 'j',
     objend = 'o', // denotes the end of an object
@@ -93,7 +94,7 @@ struct TableDef
 {
     string as; // table name used in the expression
     ExprString joinExpr; // join expression defines the relationship and the table name
-    TableDef[] dependencies; // tables that must be included first
+    const(TableDef)[] dependencies; // tables that must be included first
 }
 
 // used to designate a field as a relation (for when a relation doesn't have a
@@ -114,6 +115,15 @@ struct SQLFragment(Item)
 }
 
 
+struct Joins(Item)
+{
+    SQLFragment!Item joinFragment;
+    alias joinFragment this;
+    // track which tables have been added to the join list.
+    // TODO: figure out how to do this without an AA.
+    bool[string] tables;
+}
+
 // a query is a dynamic structure designed to contain all the things needed to
 // generate an SQL query. The function sql will fetch the current query
 // string based on the Dialect.
@@ -122,11 +132,7 @@ struct Query(Item, RowT...)
     SQLFragment!(Item) fields;
     SQLFragment!(Item) conditions;
     SQLFragment!(Item) orders;
-    SQLFragment!(Item) joins;
-
-    // track which tables have been added to the join list.
-    // TODO: figure out how to do this without an AA.
-    bool[string] tables;
+    Joins!Item joins;
 
     // used by the serialization system to determine which rows this will
     // fetch. This is only valid if fetch was used to generate the query.
@@ -150,18 +156,49 @@ struct Query(Item, RowT...)
 }
 
 // UFCS method to fetch all the parameters from the given item.
-auto params(QP...)(Query!QP q)
+package template paramsImpl(FieldNames...)
 {
-    static if(is(q.ItemType == void))
+    string paramStr()
     {
-        import std.range : only;
-        return only();
+        string result;
+        foreach(n; FieldNames)
+            result ~= "t." ~ n ~ ".params,";
+        return result;
     }
-    else
+    auto paramsImpl(T)(T t)
     {
-        import std.range : chain;
-        return chain(q.fields.params, q.conditions.params, q.joins.params, q.orders.params);
+        static if(is(t.ItemType == void))
+        {
+            import std.range : only;
+            return only();
+        }
+        else
+        {
+            import std.range : chain;
+            mixin("return chain(" ~ paramStr() ~ ");");
+        }
     }
+}
+
+struct Insert(Item)
+{
+    alias ItemType = Item;
+
+    // table for insertion.
+    string tableid;
+
+    // the items to set.
+    SQLFragment!Item colNames;
+    SQLFragment!Item colValues;
+}
+
+struct Update(Item)
+{
+    SQLFragment!Item settings;
+    SQLFragment!Item conditions;
+    Joins!Item joins;
+
+    alias ItemType = Item;
 }
 
 struct ColumnDef(T)
@@ -169,4 +206,10 @@ struct ColumnDef(T)
     const TableDef table;
     ExprString expr;
     alias type = T;
+}
+
+// basic expression for strings. Used to provide literal SQL to ExprString.
+struct Expr
+{
+    string expr;
 }

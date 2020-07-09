@@ -6,10 +6,10 @@ import sqlbuilder.traits;
 
 TableDef buildTableDef(alias relation, mapping m)(TableDef dependency)
 {
-    auto tableid = makeSpec(dependency.as ~ "_" ~ relation.name, Spec.id);
+    auto tableid = makeSpec(dependency.as ~ "_" ~ relation.name, Spec.tableid);
     auto expr = ExprString(getTableName!(relation.foreign_table).makeSpec(Spec.id),
-        " AS ", tableid, " ON (", tableid, ".", m.foreign_key.makeSpec(Spec.id),
-        " = ", dependency.as.makeSpec(Spec.id), ".", m.key.makeSpec(Spec.id), ")");
+        " AS ", tableid[2 .. $].makeSpec(Spec.id), " ON (", tableid, m.foreign_key.makeSpec(Spec.id),
+        " = ", dependency.as.makeSpec(Spec.tableid), m.key.makeSpec(Spec.id), ")");
     return TableDef(tableid[2 .. $], expr, [dependency]);
 }
 
@@ -44,7 +44,7 @@ template staticTableDef(T)
 
 private ColumnDef!T makeColumnDef(T)(const TableDef table, string tablename, string colname)
 {
-    return ColumnDef!T(table, ExprString([tablename.makeSpec(Spec.id), ".", colname.makeSpec(Spec.id)]));
+    return ColumnDef!T(table, ExprString([tablename.makeSpec(Spec.tableid), colname.makeSpec(Spec.id)]));
 }
 
 template DataSet(T)
@@ -54,6 +54,7 @@ template DataSet(T)
 
 struct DataSet(T, alias core)
 {
+    enum tableDef = core;
     enum anyNull = core.dependencies.length != 0;
     @property auto opDispatch(string item)() if (isField!(T, item))
     {
@@ -98,23 +99,26 @@ version(unittest)
     @tableName("author")
     static struct Author
     {
-        @primaryKey @autoIncrement int id;
         string firstName;
         string lastName;
+        @primaryKey @autoIncrement int id = -1;
+
+        // relations
         static @mapping("auth_id") @oneToMany!book() Relation books;
     }
 
     static struct book
     {
-        @primaryKey @autoIncrement int id;
         @colName("name") string title;
         @manyToOne!Author("author") @colName("auth_id") int author_id;
+        @primaryKey @autoIncrement int id = -1;
     }
 }
 
 unittest
 {
     import sqlbuilder.dialect.mysql;
+    import sqlbuilder.types;
     import std.typecons : Nullable;
     import std.variant : Variant;
     import std.stdio;
@@ -145,6 +149,28 @@ unittest
         writeln(q.params);
         writeln(createTableSql!Author);
         writeln(createTableSql!book);
+    }
+
+    // try some inserts
+    {
+        auto i = insert!Variant(Author("Andrei", "Alexandrescu"));
+        writeln(i.sql);
+        writeln(i.params);
+
+        i = insert!Variant(ds.tableDef).set(ds.firstName, "Andrei");
+        writeln(i.sql);
+        writeln(i.params);
+    }
+
+    // updates
+    {
+        auto u = update!Variant(Author("Steven", "Schveighoffer", 1));
+        writeln(u.sql);
+        writeln(u.params);
+
+        u = set!Variant(ds.firstName, "George".param).where(ds.id, " = ", 5.param);
+        writeln(u.sql);
+        writeln(u.params);
     }
 
     // TODO: CTFE support

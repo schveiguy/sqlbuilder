@@ -1,7 +1,6 @@
 module sqlbuilder.dialect.common;
 import sqlbuilder.traits;
 import sqlbuilder.types;
-import std.typecons;
 import std.meta;
 import std.traits;
 
@@ -90,21 +89,21 @@ unittest
     assert(p2.params.front == 5);
 }
 
-private void addJoin(QP...)(ref Query!QP q, const TableDef def)
+private void addJoin(Item)(ref Joins!Item join, const TableDef def)
 {
-    if(def.as in q.tables)
+    if(def.as in join.tables)
         // already added
         return;
 
     // short circuit any cycles
-    q.tables[def.as] = true;
+    join.tables[def.as] = true;
 
     foreach(d; def.dependencies)
-        q.addJoin(d);
+        join.addJoin(d);
 
-    if(q.joins.expr)
-        q.joins.expr ~= joinSpec;
-    q.joins.expr ~= def.joinExpr;
+    if(join.expr)
+        join.expr ~= joinSpec;
+    join.expr ~= def.joinExpr;
 }
 
 private void updateQuery(string field, string sep = ", ", Q, Expr...)(ref Q query, Expr expressions) if (isQuery!Q)
@@ -113,7 +112,7 @@ private void updateQuery(string field, string sep = ", ", Q, Expr...)(ref Q quer
     {
         // add each table dependency to the query
         foreach(tbl; getTables(e))
-            addJoin(query, tbl);
+            query.joins.addJoin(tbl);
         if(__traits(getMember, query, field).expr)
             __traits(getMember, query, field).expr ~= sep;
         __traits(getMember, query, field).expr ~= e.expr;
@@ -123,27 +122,26 @@ private void updateQuery(string field, string sep = ", ", Q, Expr...)(ref Q quer
 }
 
 // use ref counting to handle lifetime management for now
-auto select(Item = void, Cols...)(Cols cols) if (cols.length == 0 || !(isInstanceOf!(RefCounted, Cols[0]) && isQuery!(typeof(cols[0].refCountedPayload()))))
+auto select(Item = void, Cols...)(Cols cols) if (cols.length == 0 || !isQuery!(Cols[0]))
 {
     // find the correct item type
     static if(is(Item == void))
         alias RealItem = getParamType!(Cols);
     else
         alias RealItem = Item;
-    auto q = Query!(RealItem)().refCounted;
-    return select(q, cols);
+    return select(Query!(RealItem)(), cols);
 }
 
-auto select(Q, Cols...)(RefCounted!(Q, RefCountedAutoInitialize.no) query, Cols columns) if (isQuery!Q)
+auto select(Q, Cols...)(Q query, Cols columns) if (isQuery!Q)
 {
-    query.refCountedPayload.updateQuery!"fields"(columns);
+    query.updateQuery!"fields"(columns);
     // adjust the query type list according to the columns.
     alias typeList = getQueryTypeList!(Q, Cols);
     static if(!is(typeList == Q.RowTypes))
     {
         alias QType = Query!(Q.ItemType, typeList);
         return () @trusted {
-            return *cast(RefCounted!(QType, RefCountedAutoInitialize.no) *)&query; 
+            return *cast(QType *)&query;
         }();
     }
     else
@@ -155,13 +153,13 @@ auto blankQuery(Item = void)()
     return select!Item();
 }
 
-auto orderBy(Q, Expr...)(RefCounted!(Q, RefCountedAutoInitialize.no) query, Expr expressions) if (isQuery!Q)
+auto orderBy(Q, Expr...)(Q query, Expr expressions) if (isQuery!Q)
 {
-    query.refCountedPayload.updateQuery!"orders"(expressions);
+    query.updateQuery!"orders"(expressions);
     return query;
 }
 
-auto where(Q, Spec...)(RefCounted!(Q, RefCountedAutoInitialize.no) query, Spec spec) if (isQuery!Q)
+auto where(Q, Spec...)(Q query, Spec spec) if (isQuery!Q || is(Q : Update!T, T))
 {
     import std.array: Appender;
     import std.range : put;
@@ -188,7 +186,7 @@ auto where(Q, Spec...)(RefCounted!(Q, RefCountedAutoInitialize.no) query, Spec s
         {
             query.conditions.expr ~= s.expr;
             foreach(tab; getTables(s))
-                query.addJoin(tab);
+                query.joins.addJoin(tab);
             static if(!is(getParamType!(typeof(s)) == void))
                 query.conditions.params.append(s.params);
         }
@@ -204,8 +202,116 @@ ColumnDef!T as(T)(ColumnDef!T col, string newName)
     return ColumnDef!T(col.table, col.expr ~ " AS " ~ newName.makeSpec(Spec.id));
 }
 
-// generate a query that provides complete rows of data from the server, given
-// the joins between the rows. All parameters must be data sets.
-auto fetch(Item = void, Sets...)(Sets sets) if (allSatisfy!(isDataSet, Sets))
+Insert!Item insert(Item)(const(TableDef) table)
 {
+    if(table.dependencies.length)
+        throw new Exception("Cannot insert into a joined table: " ~ table.as);
+    return Insert!Item(table.as);
+}
+
+auto set(Item, Col, Val)(Insert!Item ins, Col column, Val value)
+{
+    static if(is(Col == string))
+    {
+        if(ins.colNames.expr)
+            ins.colNames.expr ~= ", ";
+        ins.colNames.expr ~= column.makeSpec(Spec.id);
+    }
+    else
+    {
+        // verify that the table definitions are identical
+        foreach(tbl; getTables(column))
+            if(tbl.dependencies.length || tbl.as != ins.tableid)
+                throw new Exception("Adding incompatible column from a different table");
+
+        // append to the column names
+        if(ins.colNames.expr)
+            ins.colNames.expr ~= ", ";
+        ins.colNames.expr ~= column.expr;
+        static if(!is(getParamType!(Col) == void))
+            ins.colNames.params.append(col.params);
+    }
+
+    // append to the values
+    if(ins.colValues.expr)
+        ins.colValues.expr ~= ", ";
+    ins.colValues.expr ~= paramSpec;
+    import std.range : only;
+    ins.colValues.params.append(only(value));
+    return ins;
+}
+
+Insert!Item insert(Item, T)(T item) if (!is(T : const(TableDef)))
+{
+    import sqlbuilder.dataset;
+    import sqlbuilder.uda;
+    import std.traits;
+    // figure out the table definition
+    auto result = insert!Item(staticTableDef!T);
+
+    // now, insert all the values for the columns (ignore any autoincrement items).
+    foreach(fname; __traits(allMembers, T))
+        static if(isField!(T, fname) &&
+                  !hasUDA!(__traits(getMember, T, fname), autoIncrement))
+        {
+                result = result.set(getColumnName!(__traits(getMember, T, fname)), __traits(getMember, item, fname));
+        }
+    return result;
+}
+
+Update!Item set(Item = void, Col, Val)(Col column, Val value)
+{
+    static if(is(Item == void))
+        Update!(getParamType!(Col, Val)) result;
+    else
+        Update!Item result;
+    return set(result, column, value);
+}
+
+auto set(Item, Col, Val)(Update!Item upd, Col column, Val value)
+{
+    // add the column expression
+    foreach(tbl; getTables(column))
+        upd.joins.addJoin(tbl);
+    if(upd.settings.expr)
+        upd.settings.expr ~= ", ";
+    upd.settings.expr ~= column.expr;
+    static if(!is(getParamType!(Col) == void))
+        upd.colNames.params.append(col.params);
+    upd.settings.expr ~= " = ";
+    foreach(tbl; getTables(value))
+        upd.joins.addJoin(tbl);
+    upd.settings.expr ~= value.expr;
+    static if(!is(getParamType!(Val) == void))
+        upd.settings.params.append(value.params);
+    return upd;
+}
+
+// shortcut to update all the fields in a row. By default, this uses the
+// primary key as the "where" clause.
+Update!Item update(Item, T)(T item)
+{
+    import sqlbuilder.dataset;
+    import sqlbuilder.uda;
+    import std.traits;
+    auto result = Update!Item();
+
+    auto ds = DataSet!T.init;
+    foreach(fname; __traits(allMembers, T))
+    {
+        static if(isField!(T, fname))
+        {
+            static if(hasUDA!(__traits(getMember, T, fname), primaryKey))
+            {
+                result = result.where(__traits(getMember, ds, fname), " = ",
+                                      __traits(getMember, item, fname).param);
+            }
+            else
+            {
+                result = result.set(__traits(getMember, ds, fname),
+                                    __traits(getMember, item, fname).param);
+            }
+        }
+    }
+    return result;
 }
