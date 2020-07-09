@@ -24,13 +24,6 @@ Spec getSpec(const(char)[] s)
     return Spec.none;
 }
 
-inout(char)[] getData(inout(char)[] s)
-{
-    if(getSpec(s) == Spec.none)
-        return s;
-    return s[2 .. $];
-}
-
 struct ExprString
 {
     string[] data;
@@ -82,6 +75,31 @@ struct ExprString
     bool opCast(T: bool)()
     {
         return data.length > 0;
+    }
+
+    void toString(Out)(Out outputRange)
+    {
+        import std.range : put;
+        import std.conv : to;
+        put(outputRange, "sql{");
+        foreach(d; data)
+        {
+            auto spec = getSpec(d);
+            if(spec != Spec.none)
+            {
+                put(outputRange, "@");
+                put(outputRange, spec.to!string);
+                if(d.length > 2)
+                {
+                    put(outputRange, "(");
+                    put(outputRange, d[2 .. $]);
+                    put(outputRange, ")");
+                }
+            }
+            else
+                put(outputRange, d);
+        }
+        put(outputRange, "}");
     }
 }
 

@@ -127,6 +127,7 @@ unittest
     with(ds)
     {
         auto q = select!Variant().where(lastName, " = ", "Alexandrescu".param).select(all, opDispatch!("books").title).orderBy(ds.opDispatch!("books").title);
+        writeln(q);
         writeln(q.sql);
         writeln(q.params);
     }

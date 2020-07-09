@@ -323,7 +323,7 @@ version(Have_mysql_native)
     import mysql.connection;
 
     // fetch a range of serialized items
-    auto fetch(QD...)(Connection conn, Query!(QD) q)
+    auto fetch(bool throwOnExtraColumns = false, QD...)(Connection conn, Query!(QD) q)
     {
         import mysql.commands;
         import mysql.result;
@@ -440,7 +440,10 @@ objSwitch:
                             }
 
                         default:
-                            throw new Exception("Unknown column name found: " ~ colNames[colIdx]);
+                            static if(throwOnExtraColumns)
+                                throw new Exception("Unknown column name found: " ~ colNames[colIdx]);
+                            else
+                                break;
                         }
                         ++colIdx;
                     }
