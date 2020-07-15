@@ -149,8 +149,11 @@ struct Query(Item, RowT...)
 {
     SQLFragment!(Item) fields;
     SQLFragment!(Item) conditions;
+    SQLFragment!(Item) groups;
     SQLFragment!(Item) orders;
     Joins!Item joins;
+    size_t limitQty = 0;
+    size_t limitOffset = 0;
 
     // used by the serialization system to determine which rows this will
     // fetch. This is only valid if fetch was used to generate the query.
@@ -215,6 +218,15 @@ struct Update(Item)
     SQLFragment!Item settings;
     SQLFragment!Item conditions;
     Joins!Item joins;
+
+    alias ItemType = Item;
+}
+
+struct Delete(Item)
+{
+    // relations, possibly used for "where" clause, but not deleted from
+    Joins!Item joins;
+    SQLFragment!Item conditions;
 
     alias ItemType = Item;
 }

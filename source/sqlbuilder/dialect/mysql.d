@@ -49,7 +49,7 @@ auto params(T)(T t)
 {
     static if(isQuery!T)
     {
-        return paramsImpl!("fields", "joins", "conditions", "orders")(t);
+        return paramsImpl!("fields", "joins", "conditions", "groups", "orders")(t);
     }
     else static if(is(T : Insert!P, P))
     {
@@ -59,12 +59,18 @@ auto params(T)(T t)
     {
         return paramsImpl!("joins", "settings", "conditions")(t);
     }
+    else static if(is(T : Delete!P, P))
+    {
+        return paramsImpl!("joins", "conditions")(t);
+    }
+    else static assert("Unsupported type for params property: " ~ T.stringof);
 }
 
 string sql(bool includeObjectSeparators = false, QP...)(Query!(QP) q)
 {
     import std.array : Appender;
     import std.range : put;
+    import std.format : formattedWrite;
     Appender!string app;
     assert(q.fields.expr);
     assert(q.joins.expr);
@@ -85,8 +91,18 @@ string sql(bool includeObjectSeparators = false, QP...)(Query!(QP) q)
     addFragment(q.joins, " FROM ");
     // CONDITIONS
     addFragment(q.conditions, " WHERE ");
+    // GROUP BY
+    addFragment(q.groups, " GROUP BY ");
     // ORDER BY
     addFragment(q.orders, " ORDER BY ");
+
+    if(q.limitQty)
+    {
+        if(q.limitOffset)
+            formattedWrite(app, " LIMIT %s, %s", q.limitOffset, q.limitQty);
+        else
+            formattedWrite(app, " LIMIT %s", q.limitQty);
+    }
 
     return app.data;
 }
@@ -140,6 +156,40 @@ string sql(Item)(Update!Item upd)
     return app.data;
 }
 
+string sql(Item)(Delete!Item del)
+{
+    // DELETE FROM table LEFT JOIN other tables.
+    import std.array : Appender;
+    import std.range : put;
+    Appender!string app;
+    assert(del.joins.expr);
+
+    // add a set of fragments given the prefix and the separator
+    void addFragment(SQLFragment!(del.ItemType) item, string prefix)
+    {
+        if(item.expr)
+        {
+            put(app, prefix);
+            sqlPut!(false, true)(app, item.expr);
+        }
+    }
+
+    // if there is at least one join, we have to change the syntax
+    import std.algorithm : canFind;
+    put(app, "DELETE ");
+    if(del.joins.expr.data.canFind!(s => s.getSpec == Spec.join))
+    {
+        // get the first table
+        sqlPut!(false, true)(app, ExprString(del.joins.expr.data[0 .. 1]));
+    }
+    // table to delete from, and any joins.
+    addFragment(del.joins, " FROM ");
+    // CONDITIONS
+    addFragment(del.conditions, " WHERE ");
+
+    return app.data;
+}
+
 private import std.meta : AliasSeq;
 private import std.datetime : Date, DateTime, TimeOfDay;
 private alias _typeMappings = AliasSeq!(
@@ -188,8 +238,8 @@ template createTableSql(T)
             alias fieldType = typeof(__traits(getMember, T, field));
             static if(!is(fieldType == Relation))
             {
-                string name =
-                result ~= "`" ~ getColumnName!(__traits(getMember, T, field)) ~ "` ";
+                string name = result ~= "`"
+                    ~ getColumnName!(__traits(getMember, T, field)) ~ "` ";
                 enum isNullable = isInstanceOf!(Nullable, fieldType);
                 static if(isNullable)
                     result ~= getFieldType!(typeof(fieldType.init.get()));
@@ -228,8 +278,30 @@ enum dropTableSql(T) = "DROP TABLE IF EXISTS `" ~ getTableName!T ~ "`";
 
 // create relations between this database and it's related ones. All tables are
 // expected to exist already.
-template createRelations(T)
+template createRelationsSql(T)
 {
+    string[] relations()
+    {
+        import std.traits;
+        import std.typecons : Nullable;
+        import sqlbuilder.uda;
+        import sqlbuilder.traits;
+        string[] result;
+        foreach(field; FieldNameTuple!T)
+        {
+            // only look for field relations, not Relation items which have no
+            // local field.
+            static if(isField!(T, field) && isRelationField!(__traits(getMember, T, field)))
+            {
+                // get the relation name
+                enum mapping = getMappingFor!(__traits(getMember, T, field));
+                enum relation = getRelationFor!(__traits(getMember, T, field));
+                result ~= "ALTER TABLE `" ~ getTableName!T ~ "` ADD FOREIGN KEY (`" ~ mapping.key ~ "`) REFERENCES `" ~ getTableName!(relation.foreign_table) ~ "` (`" ~ mapping.foreign_key ~ "`)";
+            }
+        }
+        return result;
+    }
+    enum createRelationsSql = relations();
 }
 
 
@@ -459,7 +531,8 @@ objSwitch:
 
     // returns the rows affected
     long perform(Q)(Connection conn, Q stmt) if(is(Q : Insert!P, P) ||
-                                                is(Q : Update!P, P))
+                                                is(Q : Update!P, P) ||
+                                                is(Q : Delete!P, P))
     {
         import mysql.commands;
 
@@ -497,6 +570,19 @@ objSwitch:
         return blueprint;
     }
 
+    // returns true if the item was updated. Only valid for records that have a
+    // primary key.
+    bool save(T)(Connection conn, T item) if (hasPrimaryKey!T)
+    {
+        return conn.perform(update!Variant(item)) == 1;
+    }
+
+    // returns true if the item was erased from the db.
+    bool erase(T)(Connection conn, T item) if (hasPrimaryKey!T)
+    {
+        return conn.perform(remove!Variant(item)) == 1;
+    }
+
     unittest
     {
         import sqlbuilder.dataset;
@@ -505,23 +591,37 @@ objSwitch:
         import mysql.protocol.sockets;
         auto conn = new Connection(MySQLSocketType.phobos, "localhost", "test", "test", "test");
         scope(exit) conn.close();
+        conn.exec("SET FOREIGN_KEY_CHECKS = 0");
         conn.exec(dropTableSql!Author);
-        conn.exec(createTableSql!Author);
         conn.exec(dropTableSql!book);
+        conn.exec("SET FOREIGN_KEY_CHECKS = 1");
+        conn.exec(createTableSql!Author);
         conn.exec(createTableSql!book);
         import std.stdio;
+        static foreach(s; createRelationsSql!Author)
+            conn.exec(s);
+        static foreach(s; createRelationsSql!book)
+            conn.exec(s);
         auto steve = conn.create(Author("Steven", "Schveighoffer"));
-        auto andrei = conn.create(Author("Andrei", "Alexandrescu"));
+        auto ds = DataSet!Author();
+        conn.perform(insert!Variant(ds.tableDef).set(ds.firstName, "Andrei").set(ds.lastName, "Alexandrescu"));
+        auto andreiId = cast(int)conn.lastInsertID();
         conn.create(book("This Module", steve.id));
-        conn.create(book("The D Programming Language", andrei.id));
-        auto book3 = conn.create(book("Modern C++ design", andrei.id));
+        conn.create(book("The D Programming Language", andreiId));
+        auto book3 = conn.create(book("Modern C++ design", andreiId));
         assert(!conn.perform(update!Variant(book3)));
         book3.title = "Not so Modern C++ Design";
-        assert(conn.perform(update!Variant(book3)));
-        auto ds = DataSet!Author();
+        assert(conn.save(book3));
         foreach(auth, book; conn.fetch(select!string(ds.all, ds.books.all).where(ds.lastName, " = ", "Alexandrescu".param)))
         {
             writeln("author: ", auth, ", book: ", book);
         }
+
+        auto book4 = conn.create(book("Remove Me", steve.id));
+        writeln(book4);
+        assert(conn.erase(book4) == 1);
+        DataSet!book ds2;
+        //assert(conn.perform(removeFrom!(Variant)(ds2.tableDef).where(ds2.author.lastName, " = ", "Alexandrescu".param)) == 2);
+        assert(conn.perform(removeFrom!(Variant)(ds2.tableDef).withKeyFor(ds2.author, andreiId)) == 2);
     }
 }

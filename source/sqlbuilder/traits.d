@@ -93,13 +93,18 @@ template getRelationFor(alias sym)
         static if(isInstanceOf!(TableReference, typeof(u)))
         {
             static if(u.name == null)
-                enum getRelationFor = typeof(u)(__traits(identifier, sym), u.type);
+                enum result = typeof(u)(__traits(identifier, sym), u.type);
             else
-                enum getRelationFor = u;
+                enum result = u;
         }
     }
-    static assert(is(typeof(getRelationFor)), "No relation for symbol: " ~ __traits(identifier, sym));
+    static if(is(typeof(result)))
+        enum getRelationFor = result;
+    else
+        alias getRelationFor = void;
 }
+
+enum isRelationField(alias sym) = is(typeof(getRelationFor!sym) == TableReference!U, U);
 
 template getMappingFor(alias sym)
 {
@@ -197,3 +202,25 @@ template getQueryTypeList(Q, Cols...)
             alias getQueryTypeList = AliasSeq!(void);
     }
 }
+
+template primaryKeyFields(T)
+{
+    import std.meta : AliasSeq;
+    import std.traits : hasUDA;
+    template PKHelper(Fields...)
+    {
+        static if(Fields.length == 0)
+            alias PKHelper = AliasSeq!();
+        else
+        {
+            static if(hasUDA!(__traits(getMember, T, Fields[0]), primaryKey))
+                alias PKHelper = AliasSeq!(Fields[0], PKHelper!(Fields[1 .. $]));
+            else
+                alias PKHelper = PKHelper!(Fields[1 .. $]);
+        }
+    }
+
+    alias primaryKeyFields = PKHelper!(__traits(allMembers, T));
+}
+
+enum hasPrimaryKey(T) = primaryKeyFields!T.length > 0;

@@ -140,9 +140,7 @@ auto select(Q, Cols...)(Q query, Cols columns) if (isQuery!Q)
     static if(!is(typeList == Q.RowTypes))
     {
         alias QType = Query!(Q.ItemType, typeList);
-        return () @trusted {
-            return *cast(QType *)&query;
-        }();
+        return (() @trusted  => *cast(QType *)&query)();
     }
     else
         return query;
@@ -153,13 +151,26 @@ auto blankQuery(Item = void)()
     return select!Item();
 }
 
-auto orderBy(Q, Expr...)(Q query, Expr expressions) if (isQuery!Q)
+Q orderBy(Q, Expr...)(Q query, Expr expressions) if (isQuery!Q)
 {
     query.updateQuery!"orders"(expressions);
     return query;
 }
 
-auto where(Q, Spec...)(Q query, Spec spec) if (isQuery!Q || is(Q : Update!T, T))
+Q groupBy(Q, Cols...)(Q query, Cols cols) if (isQuery!Q)
+{
+    query.updateQuery!"groups"(cols);
+    return query;
+}
+
+Q limit(Q)(Q query, size_t numItems, size_t offset = 0) if (isQuery!Q)
+{
+    query.limitQty = numItems;
+    query.limitOffset = offset;
+    return query;
+}
+
+auto where(Q, Spec...)(Q query, Spec spec) if (isQuery!Q || is(Q : Update!T, T) || is(Q : Delete!T, T))
 {
     import std.array: Appender;
     import std.range : put;
@@ -314,4 +325,73 @@ Update!Item update(Item, T)(T item)
         }
     }
     return result;
+}
+
+Delete!Item removeFrom(Item)(const TableDef table)
+{
+    if(table.dependencies.length)
+        throw new Exception("Cannot delete from a joined table: " ~ table.as);
+    // blank item the correct 
+    Delete!Item result;
+    result.joins.addJoin(table);
+    return result;
+}
+
+Delete!Item remove(Item, T)(T item) if (hasPrimaryKey!T)
+{
+    import sqlbuilder.dataset;
+    DataSet!T ds;
+    return removeFrom!Item(ds.tableDef).withKeyFor(ds, item);
+}
+
+auto withKeyFor(T, Q, Args...)(Q query, T t, Args args)
+    if (isDataSet!T && hasPrimaryKey!(T.RowType) &&
+          Args.length == primaryKeyFields!(T.RowType).length &&
+          !is(Args[0] : T.RowType) &&
+          (
+             isQuery!Q ||
+             is(Q : Update!X, X) ||
+             is(Q : Insert!X, X) ||
+             is(Q : Delete!X, X)
+          )
+       )
+{
+    foreach(i, f; primaryKeyFields!(t.RowType))
+    {
+        query = query.where(__traits(getMember, t, f), " = ", 
+                            args[i].param);
+    }
+    return query;
+}
+
+auto withKeyFor(T, Q, U)(Q query, T t, U model)
+    if (isDataSet!T && hasPrimaryKey!(T.RowType) && is(U : T.RowType) &&
+          (
+             isQuery!Q ||
+             is(Q : Update!X, X) ||
+             is(Q : Insert!X, X) ||
+             is(Q : Delete!X, X)
+          )
+       )
+{
+    foreach(i, f; primaryKeyFields!(t.RowType))
+    {
+        query = query.where(__traits(getMember, t, f), " = ", 
+                            __traits(getMember, model, f).param);
+    }
+    return query;
+}
+
+auto withKeyFor(T, Q)(Q query, T t) if (!isDataSet!T && hasPrimaryKey!T)
+{
+    import sqlbuilder.dataset;
+    DataSet!T ds;
+    return query.withKeyFor(ds, t);
+}
+
+auto withKeyfor(T, Q, Args...)(Q query, Args args)
+   if (Args.length > 0 && !isDataSet!(Args[0]) && hasPrimaryKey!T)
+{
+    DataSet!T ds;
+    return query.withKeyFor(ds, args);
 }

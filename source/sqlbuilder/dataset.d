@@ -54,6 +54,7 @@ template DataSet(T)
 
 struct DataSet(T, alias core)
 {
+    alias RowType = T;
     enum tableDef = core;
     enum anyNull = core.dependencies.length != 0;
     @property auto opDispatch(string item)() if (isField!(T, item))
@@ -172,6 +173,19 @@ unittest
         u = set!Variant(ds.firstName, "George".param).where(ds.id, " = ", 5.param);
         writeln(u.sql);
         writeln(u.params);
+    }
+
+    // deletes
+    {
+        auto d = remove!Variant(Author("Steven", "Schveighoffer", 1));
+        writeln(d.sql);
+        writeln(d.params);
+        d = removeFrom!Variant(ds.tableDef).withKeyFor(Author("Steven", "Schveighoffer", 1));
+        writeln(d.sql);
+        writeln(d.params);
+        d = removeFrom!Variant(ds.tableDef).withKeyFor(ds.books, 1);
+        writeln(d.sql);
+        writeln(d.params);
     }
 
     // TODO: CTFE support
