@@ -121,13 +121,12 @@ unittest
     import sqlbuilder.dialect.mysql;
     import sqlbuilder.types;
     import std.typecons : Nullable;
-    import std.variant : Variant;
     import std.stdio;
     // create a dataset based on author
     DataSet!(Author) ds;
     with(ds)
     {
-        auto q = select!Variant().where(lastName, " = ", "Alexandrescu".param).select(all, opDispatch!("books").title).orderBy(ds.opDispatch!("books").title);
+        auto q = select().where(lastName, " = ", "Alexandrescu".param).select(all, opDispatch!("books").title).orderBy(ds.opDispatch!("books").title);
         writeln(q);
         writeln(q.sql);
         writeln(q.params);
@@ -140,13 +139,13 @@ unittest
     with(ds2)
     {
         Nullable!string s;
-        auto q = select!Variant(all, author.books.title.as("other_book_title")).where(author.lastName, " = ", s.param);
+        auto q = select(all, author.books.title.as("other_book_title")).where(author.lastName, " = ", s.param);
         //pragma(msg, q.RowTypes);
         writeln(q.sql);
         writeln(q.params);
 
         s = "Alexandrescu";
-        q = select!Variant(all, author.books.title.as("other_book_title")).where(author.lastName, " = ", s.param);
+        q = select(all, author.books.title.as("other_book_title")).where(author.lastName, " = ", s.param);
         writeln(q.sql);
         writeln(q.params);
         writeln(createTableSql!Author);
@@ -155,38 +154,38 @@ unittest
 
     // try some inserts
     {
-        auto i = insert!Variant(Author("Andrei", "Alexandrescu"));
+        auto i = insert(Author("Andrei", "Alexandrescu"));
         writeln(i.sql);
         writeln(i.params);
 
-        i = insert!Variant(ds.tableDef).set(ds.firstName, "Andrei");
+        i = insert(ds.tableDef).set(ds.firstName, "Andrei");
         writeln(i.sql);
         writeln(i.params);
     }
 
     // updates
     {
-        auto u = update!Variant(Author("Steven", "Schveighoffer", 1));
+        auto u = update(Author("Steven", "Schveighoffer", 1));
         writeln(u.sql);
         writeln(u.params);
 
-        u = set!Variant(ds.firstName, "George".param).where(ds.id, " = ", 5.param);
+        u = set(ds.firstName, "George".param).where(ds.id, " = ", 5.param);
         writeln(u.sql);
         writeln(u.params);
     }
 
     // deletes
     {
-        auto d = remove!Variant(Author("Steven", "Schveighoffer", 1));
+        auto d = remove(Author("Steven", "Schveighoffer", 1));
         writeln(d.sql);
         writeln(d.params);
-        d = removeFrom!Variant(ds.tableDef).havingKey(Author("Steven", "Schveighoffer", 1));
+        d = removeFrom(ds.tableDef).havingKey(Author("Steven", "Schveighoffer", 1));
         writeln(d.sql);
         writeln(d.params);
-        d = removeFrom!Variant(ds.tableDef).havingKey(ds.books, 1);
+        d = removeFrom(ds.tableDef).havingKey(ds.books, 1);
         writeln(d.sql);
         writeln(d.params);
-        d = removeFrom!Variant(ds.tableDef).havingKey!Author(1);
+        d = removeFrom(ds.tableDef).havingKey!Author(1);
         writeln(d.sql);
         writeln(d.params);
     }

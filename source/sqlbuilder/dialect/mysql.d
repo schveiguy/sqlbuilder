@@ -1,7 +1,12 @@
 module sqlbuilder.dialect.mysql;
-public import sqlbuilder.dialect.common;
+import sqlbuilder.dialect.impl;
+public import sqlbuilder.dialect.common : param, where, limit, orderBy, groupBy, as, havingKey;
 import sqlbuilder.types;
 import sqlbuilder.traits;
+
+// alias all the items from the implementation template for variant
+static foreach(f; __traits(allMembers, SQLImpl!Variant))
+    mixin("alias " ~ f ~ " = SQLImpl!Variant." ~ f ~ ";");
 
 private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, App)(ref App app, ExprString expr)
 {
@@ -557,7 +562,7 @@ objSwitch:
         import sqlbuilder.uda;
 
         // use insert to create it
-        auto ins = insert!Variant(blueprint);
+        auto ins = insert(blueprint);
         auto rowsAffected = conn.perform(ins);
         // check for an autoInc field
         foreach(fname; __traits(allMembers, T))
@@ -574,13 +579,13 @@ objSwitch:
     // primary key.
     bool save(T)(Connection conn, T item) if (hasPrimaryKey!T)
     {
-        return conn.perform(update!Variant(item)) == 1;
+        return conn.perform(update(item)) == 1;
     }
 
     // returns true if the item was erased from the db.
     bool erase(T)(Connection conn, T item) if (hasPrimaryKey!T)
     {
-        return conn.perform(remove!Variant(item)) == 1;
+        return conn.perform(remove(item)) == 1;
     }
 
     unittest
@@ -604,15 +609,15 @@ objSwitch:
             conn.exec(s);
         auto steve = conn.create(Author("Steven", "Schveighoffer"));
         auto ds = DataSet!Author();
-        conn.perform(insert!Variant(ds.tableDef).set(ds.firstName, "Andrei").set(ds.lastName, "Alexandrescu"));
+        conn.perform(insert(ds.tableDef).set(ds.firstName, "Andrei").set(ds.lastName, "Alexandrescu"));
         auto andreiId = cast(int)conn.lastInsertID();
         conn.create(book("This Module", steve.id));
         conn.create(book("The D Programming Language", andreiId));
         auto book3 = conn.create(book("Modern C++ design", andreiId));
-        assert(!conn.perform(update!Variant(book3)));
+        assert(!conn.perform(update(book3)));
         book3.title = "Not so Modern C++ Design";
         assert(conn.save(book3));
-        foreach(auth, book; conn.fetch(select!string(ds.all, ds.books.all).where(ds.lastName, " = ", "Alexandrescu".param)))
+        foreach(auth, book; conn.fetch(select(ds.all, ds.books.all).where(ds.lastName, " = ", "Alexandrescu".param)))
         {
             writeln("author: ", auth, ", book: ", book);
         }
@@ -621,7 +626,8 @@ objSwitch:
         writeln(book4);
         assert(conn.erase(book4) == 1);
         DataSet!book ds2;
-        //assert(conn.perform(removeFrom!(Variant)(ds2.tableDef).where(ds2.author.lastName, " = ", "Alexandrescu".param)) == 2);
-        assert(conn.perform(removeFrom!(Variant)(ds2.tableDef).havingKey(ds2.author, andreiId)) == 2);
+        //assert(conn.perform(removeFrom(ds2.tableDef).where(ds2.author.lastName, " = ", "Alexandrescu".param)) == 2);
+        assert(conn.perform(removeFrom(ds2.tableDef).havingKey(ds2.author, andreiId)) == 2);
+        assert(conn.perform(removeFrom(ds2.tableDef).havingKey(ds2.author, steve)) == 1);
     }
 }
