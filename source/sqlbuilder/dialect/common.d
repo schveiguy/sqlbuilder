@@ -341,10 +341,10 @@ Delete!Item remove(Item, T)(T item) if (hasPrimaryKey!T)
 {
     import sqlbuilder.dataset;
     DataSet!T ds;
-    return removeFrom!Item(ds.tableDef).withKeyFor(ds, item);
+    return removeFrom!Item(ds.tableDef).havingKey(ds, item);
 }
 
-auto withKeyFor(T, Q, Args...)(Q query, T t, Args args)
+auto havingKey(T, Q, Args...)(Q query, T t, Args args)
     if (isDataSet!T && hasPrimaryKey!(T.RowType) &&
           Args.length == primaryKeyFields!(T.RowType).length &&
           !is(Args[0] : T.RowType) &&
@@ -364,7 +364,7 @@ auto withKeyFor(T, Q, Args...)(Q query, T t, Args args)
     return query;
 }
 
-auto withKeyFor(T, Q, U)(Q query, T t, U model)
+auto havingKey(T, Q, U)(Q query, T t, U model)
     if (isDataSet!T && hasPrimaryKey!(T.RowType) && is(U : T.RowType) &&
           (
              isQuery!Q ||
@@ -382,16 +382,17 @@ auto withKeyFor(T, Q, U)(Q query, T t, U model)
     return query;
 }
 
-auto withKeyFor(T, Q)(Q query, T t) if (!isDataSet!T && hasPrimaryKey!T)
+auto havingKey(T, Q)(Q query, T t) if (!isDataSet!T && hasPrimaryKey!T)
 {
     import sqlbuilder.dataset;
     DataSet!T ds;
-    return query.withKeyFor(ds, t);
+    return query.havingKey(ds, t);
 }
 
-auto withKeyfor(T, Q, Args...)(Q query, Args args)
+auto havingKey(T, Q, Args...)(Q query, Args args)
    if (Args.length > 0 && !isDataSet!(Args[0]) && hasPrimaryKey!T)
 {
+    import sqlbuilder.dataset;
     DataSet!T ds;
-    return query.withKeyFor(ds, args);
+    return query.havingKey(ds, args);
 }

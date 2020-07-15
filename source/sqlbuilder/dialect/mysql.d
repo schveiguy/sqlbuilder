@@ -622,6 +622,6 @@ objSwitch:
         assert(conn.erase(book4) == 1);
         DataSet!book ds2;
         //assert(conn.perform(removeFrom!(Variant)(ds2.tableDef).where(ds2.author.lastName, " = ", "Alexandrescu".param)) == 2);
-        assert(conn.perform(removeFrom!(Variant)(ds2.tableDef).withKeyFor(ds2.author, andreiId)) == 2);
+        assert(conn.perform(removeFrom!(Variant)(ds2.tableDef).havingKey(ds2.author, andreiId)) == 2);
     }
 }

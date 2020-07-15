@@ -180,10 +180,13 @@ unittest
         auto d = remove!Variant(Author("Steven", "Schveighoffer", 1));
         writeln(d.sql);
         writeln(d.params);
-        d = removeFrom!Variant(ds.tableDef).withKeyFor(Author("Steven", "Schveighoffer", 1));
+        d = removeFrom!Variant(ds.tableDef).havingKey(Author("Steven", "Schveighoffer", 1));
         writeln(d.sql);
         writeln(d.params);
-        d = removeFrom!Variant(ds.tableDef).withKeyFor(ds.books, 1);
+        d = removeFrom!Variant(ds.tableDef).havingKey(ds.books, 1);
+        writeln(d.sql);
+        writeln(d.params);
+        d = removeFrom!Variant(ds.tableDef).havingKey!Author(1);
         writeln(d.sql);
         writeln(d.params);
     }
