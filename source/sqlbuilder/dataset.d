@@ -97,21 +97,37 @@ struct DataSet(T, alias core)
 
 version(unittest)
 {
+    struct MyBool
+    {
+        bool _val;
+        string dbValue() { return _val ? "Y" : "N"; }
+        alias _val this;
+        static MyBool fromDbValue(string item) {
+            return MyBool(item == "Y" || item == "y");
+        }
+    }
+
     @tableName("author")
     static struct Author
     {
         string firstName;
         string lastName;
         @primaryKey @autoIncrement int id = -1;
+        @colType("VARCHAR(1)") MyBool ynAnswer;
 
         // relations
         static @mapping("auth_id") @oneToMany!book() Relation books;
     }
 
+    enum BookType {
+        Reference,
+        Fiction
+    }
     static struct book
     {
-        @colName("name") string title;
+        @unique @colName("name") @colType("VARCHAR(100)") string title;
         @manyToOne!Author("author") @colName("auth_id") int author_id;
+        BookType book_type;
         @primaryKey @autoIncrement int id = -1;
     }
 }
@@ -126,7 +142,7 @@ unittest
     DataSet!(Author) ds;
     with(ds)
     {
-        auto q = select().where(lastName, " = ", "Alexandrescu".param).select(all, opDispatch!("books").title).orderBy(ds.opDispatch!("books").title);
+        auto q = select().where(lastName, " = ", "Alexandrescu".param).select(all, books.title).orderBy(books.title);
         writeln(q);
         writeln(q.sql);
         writeln(q.params);

@@ -1,15 +1,9 @@
 /// UDA items to apply to row structures
 module sqlbuilder.uda;
 
-struct TableName
+struct tableName
 {
     string name;
-    alias name this;
-}
-
-TableName tableName(string s)
-{
-    return TableName(s);
 }
 
 enum RefType
@@ -48,22 +42,36 @@ struct mapping
     string key = "id";
 }
 
+// specify a different column name for a field. By default, the field's name is
+// used.
 struct colName
 {
     string name;
 }
 
-struct dbType
+// specify an alternate column type. This is possibly specific to the database
+// engine. By default the engine picks the type based on the field type. This
+// only has any bearing when creating tables. This does NOT affect parameter
+// types, and should still be something that properly serializes to/from the
+// given D type. For example, a string field could be adjusted to be VARCHAR(10)
+// instead of TEXT. Use a specialized type to convert between different D
+// types.
+struct colType
 {
     string type;
 }
 
+// ignore a field, it is not considered part of the database data.
+enum ignore;
 
-enum indexed;
-
+// tag a column as part of the primary key
 enum primaryKey;
 
+// make a specific column unique in the table
 enum unique;
 
+// tag a column as receiving an automatic value incremented by the database
+// (usually the id).
 enum autoIncrement;
 
+// TODO: figure out how to do indexes besides primary key.

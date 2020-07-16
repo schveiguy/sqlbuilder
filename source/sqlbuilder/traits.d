@@ -40,7 +40,7 @@ package auto ref getTables(T)(auto ref T item)
 template getTableName(T)
 {
     static foreach(u; __traits(getAttributes, T))
-        static if(is(typeof(u) == TableName))
+        static if(is(typeof(u) == tableName))
             enum result = u.name;
     static if(is(typeof(result)))
         enum getTableName = result;
@@ -51,9 +51,13 @@ template getTableName(T)
 template isField(T, string item)
 {
     private import std.traits;
-    // is a member, is not a static member, is not a Relation type.
-    static if(__traits(hasMember, T, item) && !hasStaticMember!(T, item) && !is(typeof(__traits(getMember, T, item)) == Relation))
-        enum isField = true;
+    // is a member, is not a static member, is not a Relation type and not ignored.
+    static if(__traits(hasMember, T, item))
+    {
+        enum isField = !hasStaticMember!(T, item) &&
+            !hasUDA!(__traits(getMember, T, item), ignore) &&
+            !is(typeof(__traits(getMember, T, item)) == Relation);
+    }
     else
         enum isField = false;
 }
@@ -62,7 +66,7 @@ template isField(T, string item)
 template getRelationField(T, string item)
 {
     private import std.traits;
-    static if(__traits(hasMember, T, item) && is(typeof(__traits(getMember, T.init, item)) == Relation))
+    static if(__traits(hasMember, T, item) && is(typeof(__traits(getMember, T, item)) == Relation))
     {
         // A relation field directly in the item
         enum getRelationField = item;

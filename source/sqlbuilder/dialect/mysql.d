@@ -1,12 +1,13 @@
 module sqlbuilder.dialect.mysql;
-import sqlbuilder.dialect.impl;
 public import sqlbuilder.dialect.common : param, where, limit, orderBy, groupBy, as, havingKey;
+import sqlbuilder.dialect.common : SQLImpl;
 import sqlbuilder.types;
 import sqlbuilder.traits;
 
 // alias all the items from the implementation template for variant
-static foreach(f; __traits(allMembers, SQLImpl!Variant))
-    mixin("alias " ~ f ~ " = SQLImpl!Variant." ~ f ~ ";");
+alias _impl = SQLImpl!Variant;
+static foreach(f; __traits(allMembers, _impl))
+    mixin("alias " ~ f ~ " = _impl." ~ f ~ ";");
 
 private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, App)(ref App app, ExprString expr)
 {
@@ -195,6 +196,8 @@ string sql(Item)(Delete!Item del)
     return app.data;
 }
 
+// TODO: I need to test all these mappings properly and make sure they
+// deserialize.
 private import std.meta : AliasSeq;
 private import std.datetime : Date, DateTime, TimeOfDay;
 private alias _typeMappings = AliasSeq!(
@@ -219,12 +222,34 @@ private alias _typeMappings = AliasSeq!(
     TimeOfDay, "TIME",
 );
 
-// match the D type to a specific MySQL type
-template getFieldType(T)
+private template dbValueType(T)
 {
-    static foreach(i; 0 .. _typeMappings.length / 2)
-        static if(is(T == _typeMappings[i * 2]))
-            enum getFieldType = _typeMappings[i * 2 + 1];
+    import std.typecons : Nullable;
+    static if(is(T : Nullable!U, U))
+        alias dbValueType = .dbValueType!U;
+    else
+    {
+        import sqlbuilder.dialect.common : dbValue;
+        alias dbValueType = typeof(() {return T.init.dbValue;}());
+    }
+}
+
+// match the D type to a specific MySQL type
+private template getFieldType(T)
+{
+    alias RT = dbValueType!T;
+    static if(is(RT == T))
+    {
+        static foreach(i; 0 .. _typeMappings.length / 2)
+            static if(is(T == _typeMappings[i * 2]))
+            enum result = _typeMappings[i * 2 + 1];
+        static if(is(typeof(result)))
+            alias getFieldType = result;
+        else
+            static assert(0, "Unknown mapping for type " ~ T.stringof);
+    }
+    else
+        alias getFieldType = .getFieldType!RT;
 }
 
 // generate an SQL statement to insert a table definition.
@@ -239,18 +264,19 @@ template createTableSql(T)
         auto result = "CREATE TABLE `" ~ getTableName!T ~ "` (";
         foreach(field; FieldNameTuple!T)
         {
-            // if it's a relationship, we will save this for later
             alias fieldType = typeof(__traits(getMember, T, field));
-            static if(!is(fieldType == Relation))
+            // Relations are not columns to store in the DB.
+            static if(!hasUDA!(__traits(getMember, T, field), ignore) &&
+                      !is(fieldType == Relation))
             {
                 string name = result ~= "`"
                     ~ getColumnName!(__traits(getMember, T, field)) ~ "` ";
-                enum isNullable = isInstanceOf!(Nullable, fieldType);
-                static if(isNullable)
-                    result ~= getFieldType!(typeof(fieldType.init.get()));
+                alias colTypeUDAs = getUDAs!(__traits(getMember, T, field), colType);
+                static if(colTypeUDAs.length > 0)
+                    result ~= colTypeUDAs[0].type;
                 else
                     result ~= getFieldType!fieldType;
-                static if(!isNullable)
+                static if(!isInstanceOf!(Nullable, fieldType))
                     result ~= " NOT NULL";
                 static if(hasUDA!(__traits(getMember, T, field), unique))
                     result ~= " UNIQUE";
@@ -315,11 +341,9 @@ import std.traits : isInstanceOf;
 // check if a type is a primitive, vs. an aggregate with individual columns
 private template isMysqlPrimitive(T)
 {
-    static if(isInstanceOf!(Nullable, T))
-        alias isMysqlPrimitive = .isMysqlPrimitive!(typeof(T.init.get()));
-    else
-        enum isMysqlPrimitive = !is(T == struct) || is(T == Date)
-               || is(T == DateTime) || is(T == TimeOfDay);
+    alias RT = dbValueType!T;
+    enum isMysqlPrimitive = !is(RT == struct) || is(RT == Date)
+        || is(RT == DateTime) || is(RT == TimeOfDay);
 }
 
 // if we have mysql native as a dependency, provide direct serialization from a ResultRange
@@ -346,18 +370,29 @@ version(Have_mysql_native)
     import std.variant : Variant;
     private auto getLeaf(T)(Variant v) if (isMysqlPrimitive!T)
     {
-        static if(isInstanceOf!(Nullable, T))
+        alias RT = dbValueType!T;
+        static if(is(T : Nullable!U, U))
         {
             if(v.type == typeid(typeof(null)))
             {
                 return T.init;
             }
-            return T(v.get!(typeof(T.init.get())));
+            return T(getLeaf!U(v));
         }
         else
         {
             // null not tolerated
-            return v.get!T;
+            import std.conv;
+            static if(is(RT == T))
+                return v.get!T;
+            else static if(is(typeof(T(RT.init))))
+                return T(v.get!RT);
+            else static if(is(typeof(T.fromDbValue(RT.init))))
+                return T.fromDbValue(v.get!RT);
+            else static if(is(typeof(RT.init.to!T)))
+                return v.get!RT.to!T;
+            else
+                static assert(0, "Cannot figure out how to convert database value of type " ~ RT.stringof ~ " to D type " ~ T.stringof);
         }
     }
 
@@ -609,13 +644,14 @@ objSwitch:
             conn.exec(s);
         auto steve = conn.create(Author("Steven", "Schveighoffer"));
         auto ds = DataSet!Author();
-        conn.perform(insert(ds.tableDef).set(ds.firstName, "Andrei").set(ds.lastName, "Alexandrescu"));
+        conn.perform(insert(ds.tableDef).set(ds.firstName, "Andrei").set(ds.lastName, "Alexandrescu").set(ds.ynAnswer, MyBool(true)));
         auto andreiId = cast(int)conn.lastInsertID();
         conn.create(book("This Module", steve.id));
         conn.create(book("The D Programming Language", andreiId));
         auto book3 = conn.create(book("Modern C++ design", andreiId));
         assert(!conn.perform(update(book3)));
         book3.title = "Not so Modern C++ Design";
+        book3.book_type = BookType.Fiction;
         assert(conn.save(book3));
         foreach(auth, book; conn.fetch(select(ds.all, ds.books.all).where(ds.lastName, " = ", "Alexandrescu".param)))
         {
