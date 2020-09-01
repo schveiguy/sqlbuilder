@@ -3,6 +3,7 @@ public import sqlbuilder.dialect.common : param, where, limit, orderBy, groupBy,
 import sqlbuilder.dialect.common : SQLImpl;
 import sqlbuilder.types;
 import sqlbuilder.traits;
+import std.variant : Variant;
 
 // alias all the items from the implementation template for variant
 alias _impl = SQLImpl!Variant;
@@ -367,7 +368,6 @@ version(Have_mysql_native)
         }
     }
 
-    import std.variant : Variant;
     private auto getLeaf(T)(Variant v) if (isMysqlPrimitive!T)
     {
         alias RT = dbValueType!T;
