@@ -52,17 +52,22 @@ template isField(T, string item)
 {
     private import std.traits;
     // is a member, is not a static member, is not a Relation type and not ignored.
+    // TODO: we ignore functions for now, but possibly we may want to include them.
     static if(__traits(hasMember, T, item))
     {
         enum isField = !hasStaticMember!(T, item) &&
             !hasUDA!(__traits(getMember, T, item), ignore) &&
-            !is(typeof(__traits(getMember, T, item)) == Relation);
+            !is(typeof(__traits(getMember, T, item)) == Relation) &&
+            !is(typeof(__traits(getMember, T, item)) == function);
+            /*item != "opAssign" &&
+            item != "opCmp" &&
+            item != ;*/
     }
     else
         enum isField = false;
 }
 
-// gets the field that contains the given relation. From there, the 
+// gets the field that contains the given relation.
 template getRelationField(T, string item)
 {
     private import std.traits;
@@ -87,6 +92,28 @@ template getRelationField(T, string item)
     }
 }
 
+// get a relation in T that has a relation to a U
+template getRelationField(T, U)
+{
+    private import std.traits;
+    // look for a field with a UDA
+    static foreach(f; __traits(allMembers, T))
+        static foreach(u; __traits(getAttributes, __traits(getMember, T, f)))
+        {
+            static if(is(typeof(u)) && isInstanceOf!(TableReference, typeof(u)) && is(u.foreign_table == U))
+            {
+                static if(is(typeof(result)))
+                    static assert(0, "Multiple relations exist for " ~ T.stringof ~ " to " ~ U.stringof);
+                else
+                    enum result = f;
+            }
+        }
+    static if(is(typeof(result)))
+        enum getRelationField = result;
+    else
+        enum string getRelationField = null;
+}
+
 enum isRelation(T, string item) = getRelationField!(T, item) != null;
 
 template getRelationFor(alias sym)
@@ -94,7 +121,7 @@ template getRelationFor(alias sym)
     private import std.traits;
     static foreach(u; __traits(getAttributes, sym))
     {
-        static if(isInstanceOf!(TableReference, typeof(u)))
+        static if(is(typeof(u)) && isInstanceOf!(TableReference, typeof(u)))
         {
             static if(u.name == null)
                 enum result = typeof(u)(__traits(identifier, sym), u.type);

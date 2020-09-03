@@ -183,9 +183,9 @@ auto where(Q, Spec...)(Q query, Spec spec) if (isQuery!Q || is(Q : Update!T, T) 
                 return query;
 
     if(query.conditions.expr)
-        query.conditions.expr ~= " AND ";
+        query.conditions.expr ~= andSpec;
     // static 
-    foreach(s; spec)
+    foreach(i, s; spec)
     {
         static if(is(typeof(s) : const(char)[]))
         {
@@ -201,7 +201,10 @@ auto where(Q, Spec...)(Q query, Spec spec) if (isQuery!Q || is(Q : Update!T, T) 
                 query.conditions.params.append(s.params);
         }
         else
-            static assert(false, "Unsupported type for where clause: " ~ typeof(s).stringof ~ ", maybe try wrapping as a parameter");
+        {
+            enum int pnum = i + 1;
+            static assert(false, "Unsupported type for where clause: " ~ typeof(s).stringof ~ " (arg " ~ pnum.stringof ~ "), maybe try wrapping with `sqlbuilder.dialect.common.param`");
+        }
     }
 
     return query;
@@ -263,6 +266,16 @@ auto havingKey(T, Q, Args...)(Q query, Args args)
 ColumnDef!T as(T)(ColumnDef!T col, string newName)
 {
     return ColumnDef!T(col.table, col.expr ~ " AS " ~ newName.makeSpec(Spec.id));
+}
+
+ColumnDef!T ascend(T)(ColumnDef!T col)
+{
+    return ColumnDef!T(col.table, col.expr ~ " ASC");
+}
+
+ColumnDef!T descend(T)(ColumnDef!T col)
+{
+    return ColumnDef!T(col.table, col.expr ~ " DESC");
 }
 
 // template to implement all functions that require a specific parameter type.

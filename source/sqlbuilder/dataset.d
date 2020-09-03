@@ -61,7 +61,7 @@ struct DataSet(T, alias core)
     {
         // This is a column of the row, so just build the correct column definition.
         import std.typecons : Nullable;
-        static if(anyNull)
+        static if(anyNull && !is(typeof(__traits(getMember, T, item)) : Nullable!U, U))
             alias X = Nullable!(typeof(__traits(getMember, T, item)));
         else
             alias X = typeof(__traits(getMember, T, item));
@@ -93,6 +93,43 @@ struct DataSet(T, alias core)
                                                   makeSpec("", Spec.objend)));
         return col;
     }
+}
+
+// gets a data set that is defined by the related table. Used when it's too
+// cumbersome to define all the various relations in the primary table.
+//
+// if relationName is null, and there is only one relation between the tables,
+// then that relation is used. If relationName is not null, then the relation
+// must be that name. A relation name is required when 2 relations between the
+// types exist.
+//
+// The join name is kind of convoluted, but hard to make a unique one that
+// reads well in English. perhaps this can be improved (maybe reverse the table
+// definitions up to that point).
+auto related(T, string relationName = null, DS1)(DS1 dataset) if (isDataSet!DS1)
+{
+    static if(relationName.length)
+    {
+        static assert(isRelation!(T, relationName),
+                      "No relation named " ~ relationName ~ " for " ~ T.stringof
+                      ~ " to " ~ DS1.RowType.stringof);
+        enum relatedField = getRelationField!(T, relationName);
+    }
+    else
+    {
+        enum relatedField = getRelationField!(T, dataset.RowType);
+        static assert(relatedField.length,
+                      "No relation for " ~ T.stringof ~ " to "
+                      ~ DS1.RowType.stringof);
+    }
+
+    // now have the related field, fetch the relation and the mapping, and do
+    // it in reverse.
+    static assert(relatedField != null);
+    enum mapping = getMappingFor!(__traits(getMember, T, relatedField)).recip;
+    enum revRelation = getRelationFor!(__traits(getMember, T, relatedField));
+    enum relation = TableReference!T(getTableName!T ~ "_having_" ~ revRelation.name, revRelation.type.recip);
+    return DataSet!(T, staticTableDef!(relation, mapping, dataset.tableDef)).init;
 }
 
 version(unittest)
@@ -149,13 +186,11 @@ unittest
     }
 
     DataSet!(book) ds2;
-    //ds2._core = new DataSetCore;
-    //ds2._core.root = buildTableDef!book;
 
     with(ds2)
     {
         Nullable!string s;
-        auto q = select(all, author.books.title.as("other_book_title")).where(author.lastName, " = ", s.param);
+        auto q = select(all, author.related!book.title.as("other_book_title")).where(author.lastName, " = ", s.param);
         //pragma(msg, q.RowTypes);
         writeln(q.sql);
         writeln(q.params);

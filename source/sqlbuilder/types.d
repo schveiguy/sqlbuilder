@@ -9,11 +9,16 @@ enum Spec : char
     param = 'p',
     join = 'j',
     objend = 'o', // denotes the end of an object
+    // separator between clauses. Encoded as a spec to allow for optional
+    // parentheses
+    and = 'a',
 }
 
 enum joinSpec = "\\" ~ Spec.join;
 
 enum paramSpec = "\\" ~ Spec.param;
+
+enum andSpec = "\\" ~ Spec.and;
 
 Spec getSpec(const(char)[] s)
 {

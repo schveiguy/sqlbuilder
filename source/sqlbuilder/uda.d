@@ -13,6 +13,19 @@ enum RefType
     OneToOne
 }
 
+RefType recip(RefType rt)
+{
+    with(RefType) final switch(rt)
+    {
+    case OneToMany:
+        return ManyToOne;
+    case ManyToOne:
+        return OneToMany;
+    case OneToOne:
+        return OneToOne;
+    }
+}
+
 struct TableReference(T)
 {
     alias foreign_table = T;
@@ -40,6 +53,11 @@ struct mapping
     string foreign_key = "id";
     // can leave off if "id" is the key or if applied to a normal column
     string key = "id";
+}
+
+mapping recip(mapping m)
+{
+    return mapping(m.key, m.foreign_key);
 }
 
 // specify a different column name for a field. By default, the field's name is

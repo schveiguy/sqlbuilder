@@ -1,5 +1,5 @@
 module sqlbuilder.dialect.mysql;
-public import sqlbuilder.dialect.common : param, where, limit, orderBy, groupBy, as, havingKey;
+public import sqlbuilder.dialect.common : param, where, limit, orderBy, groupBy, as, ascend, descend, havingKey;
 import sqlbuilder.dialect.common : SQLImpl;
 import sqlbuilder.types;
 import sqlbuilder.traits;
@@ -47,6 +47,9 @@ private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, A
         static if(includeObjectSeparators)
             put(app, ", 1 AS `_objend`");
         break;
+    case and:
+        put(app, ") AND (");
+        break;
     default:
         throw new Exception("Unknown spec in: " ~ x);
     }
@@ -83,12 +86,14 @@ string sql(bool includeObjectSeparators = false, QP...)(Query!(QP) q)
     assert(q.joins.expr);
 
     // add a set of fragments given the prefix and the separator
-    void addFragment(SQLFragment!(q.ItemType) item, string prefix)
+    void addFragment(SQLFragment!(q.ItemType) item, string prefix, string postfix = null)
     {
         if(item.expr)
         {
             put(app, prefix);
             sqlPut!(includeObjectSeparators, true)(app, item.expr);
+            if(postfix.length)
+                put(app, postfix);
         }
     }
 
@@ -97,7 +102,7 @@ string sql(bool includeObjectSeparators = false, QP...)(Query!(QP) q)
     // joins
     addFragment(q.joins, " FROM ");
     // CONDITIONS
-    addFragment(q.conditions, " WHERE ");
+    addFragment(q.conditions, " WHERE (", ")");
     // GROUP BY
     addFragment(q.groups, " GROUP BY ");
     // ORDER BY
@@ -113,6 +118,12 @@ string sql(bool includeObjectSeparators = false, QP...)(Query!(QP) q)
 
     return app.data;
 }
+
+// return an sql statement that queries the total items from the given query
+// (no limits, no offsets)
+//
+// The resulting query can be sent to fetch or fetchOne, and this will get a
+// single ulong that counts the total rows.
 
 string sql(Item)(Insert!Item ins)
 {
@@ -144,12 +155,14 @@ string sql(Item)(Update!Item upd)
     assert(upd.joins.expr);
 
     // add a set of fragments given the prefix and the separator
-    void addFragment(SQLFragment!(upd.ItemType) item, string prefix)
+    void addFragment(SQLFragment!(upd.ItemType) item, string prefix, string postfix = null)
     {
         if(item.expr)
         {
             put(app, prefix);
             sqlPut!(false, true)(app, item.expr);
+            if(postfix.length)
+                put(app, postfix);
         }
     }
 
@@ -158,7 +171,7 @@ string sql(Item)(Update!Item upd)
     // joins
     addFragment(upd.settings, " SET ");
     // CONDITIONS
-    addFragment(upd.conditions, " WHERE ");
+    addFragment(upd.conditions, " WHERE (", ")");
 
     return app.data;
 }
@@ -172,12 +185,14 @@ string sql(Item)(Delete!Item del)
     assert(del.joins.expr);
 
     // add a set of fragments given the prefix and the separator
-    void addFragment(SQLFragment!(del.ItemType) item, string prefix)
+    void addFragment(SQLFragment!(del.ItemType) item, string prefix, string postfix = null)
     {
         if(item.expr)
         {
             put(app, prefix);
             sqlPut!(false, true)(app, item.expr);
+            if(postfix.length)
+                put(app, postfix);
         }
     }
 
@@ -192,7 +207,7 @@ string sql(Item)(Delete!Item del)
     // table to delete from, and any joins.
     addFragment(del.joins, " FROM ");
     // CONDITIONS
-    addFragment(del.conditions, " WHERE ");
+    addFragment(del.conditions, " WHERE (", ")");
 
     return app.data;
 }
@@ -440,9 +455,12 @@ version(Have_mysql_native)
         import mysql.commands;
         import mysql.result;
         ResultRange seq;
-        import std.stdio;
-        writeln(q.sql!true);
         import std.range;
+        scope(failure)
+        {
+            import std.stdio;
+            writeln("Failed SQL is: ", q.sql!true);
+        }
         if(q.params.empty)
         {
             // no parameters, just execute the query
@@ -514,8 +532,6 @@ version(Have_mysql_native)
             // map all column names to indexes
             size_t colIdx = 0;
             auto colNames = seq.colNames;
-            // have to wrap this in a function, because otherwise, I
-            // get multiple defined labels.
 
             foreach(idx, T; q.RowTypes)
             {
@@ -567,6 +583,46 @@ objSwitch:
             result.loadItem();
             return result;
         }
+    }
+
+    long fetchTotal(QP...)(Connection conn, Query!(QP) q)
+    {
+        import mysql.result;
+        import mysql.commands;
+        q.limitQty = 0;
+        q.limitOffset = 0;
+        q.orders = q.orders.init;
+        q.fields = SQLFragment!(q.ItemType)(ExprString("1"));
+        auto sql = "SELECT COUNT(*) FROM(" ~ q.sql ~ ") `counter`";
+        ResultRange seq;
+        if(q.params.empty)
+        {
+            seq = conn.query(sql);
+        }
+        else
+        {
+            auto p = conn.prepare(sql);
+            import std.range : enumerate;
+            foreach(idx, arg; q.params.enumerate)
+                p.setArg(idx, arg);
+            seq = conn.query(p);
+        }
+        return seq.empty ? 0 : seq.front[0].get!long;
+    }
+
+    auto fetchOne(bool throwOnExtraColumns = false, QD...)(Connection conn, Query!(QD) q)
+    {
+        auto r = fetch!throwOnExtraColumns(conn, q);
+        import std.range : ElementType;
+        if(r.empty)
+            throw new Exception("No items of type " ~ ElementType!(typeof(r)).stringof ~ " retreived from query");
+        return fetch!throwOnExtraColumns(conn, q).front;
+    }
+
+    auto fetchOne(bool throwOnExtraColumns = false, T, QD...)(Connection conn, Query!(QD) q, T defaultValue)
+    {
+        auto r = fetch!throwOnExtraColumns(conn, q);
+        return r.empty ? defaultValue : r.front;
     }
 
     // returns the rows affected
