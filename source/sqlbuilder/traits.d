@@ -137,29 +137,38 @@ template getRelationFor(alias sym)
 
 enum isRelationField(alias sym) = is(typeof(getRelationFor!sym) == TableReference!U, U);
 
-template getMappingFor(alias sym)
+template getMappingsFor(alias sym)
 {
-    static foreach(u; __traits(getAttributes, sym))
-        static if(is(typeof(u) == mapping))
+    import std.meta;
+    template m_list(Params...)
+    {
+        static if(Params.length == 0)
+            alias m_list = AliasSeq!();
+        else static if(is(typeof(Params[0]) == mapping))
         {
             static if(is(typeof(sym) == Relation))
-                enum result = u;
+                enum result = Params[0];
             else
                 // mapping attached to a field, use the name of the field
                 // instead of the key.
-                enum result = mapping(u.foreign_key, getColumnName!(__traits(identifier, sym)));
+                enum result = mapping(Params[0].foreign_key, getColumnName!(__traits(identifier, sym)));
+            alias m_list = AliasSeq!(result, m_list!(Params[1 .. $]));
         }
-    static if(is(typeof(result)))
-        enum getMappingFor = result;
+        else
+            alias m_list = m_list!(Params[1 .. $]);
+    }
+    alias result = m_list!(__traits(getAttributes, sym));
+    static if(result.length > 0)
+        enum getMappingsFor = result;
     else
     {
         // no mapping UDA
         // for Relations, assume both keys are the default. For non-relations,
         // use the field name as the local key.
         static if(is(typeof(sym) == Relation))
-            enum getMappingFor = mapping.init;
+            alias getMappingsFor = AliasSeq!(mapping.init);
         else
-            enum getMappingFor = mapping(mapping.init.foreign_key, getColumnName!(sym));
+            enum getMappingsFor = AliasSeq!(mapping(mapping.init.foreign_key, getColumnName!(sym)));
     }
 }
 
@@ -219,18 +228,29 @@ template isQuery(T)
 
 template getQueryTypeList(Q, Cols...)
 {
-    import std.meta : AliasSeq, allSatisfy, staticMap;
+    import std.meta : AliasSeq;
     static if(Q.RowTypes.length == 1 && is(Q.RowTypes[0] == void))
         alias getQueryTypeList = AliasSeq!(void);
     else
     {
-        enum hasType(T) = is(T.type) && !is(T.type == void);
-        alias getType(T) = T.type;
-        // check to make sure all columns have a type associated with them
-        static if(allSatisfy!(hasType, Cols))
-            alias getQueryTypeList = AliasSeq!(Q.RowTypes, staticMap!(getType, Cols));
-        else
+        template helper(size_t idx, X...)
+        {
+            static if(idx >= X.length)
+                alias helper = X;
+            else static if(isDataSet!(X[idx]))
+                alias helper = helper!(idx + 1, X[0 .. idx], typeof(X[idx].allColumns()).type, X[idx + 1 .. $]);
+            else static if(is(X[idx].type) && !is(X[idx].type == void))
+            {
+                alias helper = helper!(idx + 1, X[0 .. idx], X[idx].type, X[idx + 1 .. $]);
+            }
+            else
+                alias helper = AliasSeq!(void);
+        }
+        alias newTypes = helper!(0, Cols);
+        static if(newTypes.length == 1 && is(newTypes[0] == void))
             alias getQueryTypeList = AliasSeq!(void);
+        else
+            alias getQueryTypeList = AliasSeq!(Q.RowTypes, newTypes);
     }
 }
 

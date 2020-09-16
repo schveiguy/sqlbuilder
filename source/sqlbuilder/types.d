@@ -20,6 +20,8 @@ enum paramSpec = "\\" ~ Spec.param;
 
 enum andSpec = "\\" ~ Spec.and;
 
+enum objEndSpec = "\\" ~ Spec.objend;
+
 Spec getSpec(const(char)[] s)
 {
     if(s.length >= 2 && s[0] == '\\')

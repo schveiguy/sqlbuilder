@@ -4,12 +4,25 @@ import sqlbuilder.uda;
 import sqlbuilder.types;
 import sqlbuilder.traits;
 
-TableDef buildTableDef(alias relation, mapping m)(TableDef dependency)
+TableDef buildTableDef(alias relation, mappings...)(TableDef dependency)
 {
     auto tableid = makeSpec(dependency.as ~ "_" ~ relation.name, Spec.tableid);
+    auto deptable = dependency.as.makeSpec(Spec.tableid);
     auto expr = ExprString(getTableName!(relation.foreign_table).makeSpec(Spec.id),
-        " AS ", tableid[2 .. $].makeSpec(Spec.id), " ON (", tableid, m.foreign_key.makeSpec(Spec.id),
-        " = ", dependency.as.makeSpec(Spec.tableid), m.key.makeSpec(Spec.id), ")");
+        " AS ", tableid[2 .. $].makeSpec(Spec.id), " ON (");
+    // static
+    foreach(i, mapping; mappings)
+    {
+        static if(i == 0)
+            expr ~= ExprString(tableid, mapping.foreign_key.makeSpec(Spec.id),
+                   " = ", deptable, mapping.key.makeSpec(Spec.id));
+        else
+            expr ~= ExprString(" AND ", tableid, mapping.foreign_key.makeSpec(Spec.id),
+                   " = ", deptable, mapping.key.makeSpec(Spec.id));
+    }
+
+    expr ~= ")";
+
     return TableDef(tableid[2 .. $], expr, [dependency]);
 }
 
@@ -26,7 +39,7 @@ TableDef buildTableDef(T)(string rootName = null)
     return TableDef(rootName, expr);
 }
 
-template staticTableDef(alias relation, mapping m, TableDef dependency)
+template staticTableDef(alias relation, TableDef dependency, m...)
 {
     static const TableDef staticTableDef = buildTableDef!(relation, m)(dependency);
 }
@@ -77,12 +90,12 @@ struct DataSet(T, alias core)
         enum field = getRelationField!(T, item);
         static assert(field != null);
         enum relation = getRelationFor!(__traits(getMember, T, field));
-        enum m = getMappingFor!(__traits(getMember, T, field));
-        return .DataSet!(relation.foreign_table, staticTableDef!(relation, m, core)).init;
+        alias m = getMappingsFor!(__traits(getMember, T, field));
+        return .DataSet!(relation.foreign_table, staticTableDef!(relation, core, m)).init;
     }
 
     // shortcut for all columns
-    @property auto all()
+    @property auto allColumns()
     {
         import std.typecons : Nullable;
         static if(anyNull)
@@ -90,7 +103,7 @@ struct DataSet(T, alias core)
         else
             alias X = T;
         static col = ColumnDef!X(core, ExprString(core.as.makeSpec(Spec.id), ".*",
-                                                  makeSpec("", Spec.objend)));
+                                                  objEndSpec));
         return col;
     }
 }
@@ -126,10 +139,15 @@ auto related(T, string relationName = null, DS1)(DS1 dataset) if (isDataSet!DS1)
     // now have the related field, fetch the relation and the mapping, and do
     // it in reverse.
     static assert(relatedField != null);
-    enum mapping = getMappingFor!(__traits(getMember, T, relatedField)).recip;
+    import std.meta : staticMap;
+    template recipMapping(mapping m)
+    {
+        enum recipMapping = m.recip;
+    }
+    alias mappings = staticMap!(recipMapping, getMappingsFor!(__traits(getMember, T, relatedField)));
     enum revRelation = getRelationFor!(__traits(getMember, T, relatedField));
     enum relation = TableReference!T(getTableName!T ~ "_having_" ~ revRelation.name, revRelation.type.recip);
-    return DataSet!(T, staticTableDef!(relation, mapping, dataset.tableDef)).init;
+    return DataSet!(T, staticTableDef!(relation, dataset.tableDef, mappings)).init;
 }
 
 version(unittest)
@@ -179,8 +197,8 @@ unittest
     DataSet!(Author) ds;
     with(ds)
     {
-        auto q = select().where(lastName, " = ", "Alexandrescu".param).select(all, books.title).orderBy(books.title);
-        writeln(q);
+        auto q = select().where(lastName, " = ", "Alexandrescu".param).select(ds, books.title).orderBy(books.title);
+        //writeln(q);
         writeln(q.sql);
         writeln(q.params);
     }
@@ -189,14 +207,22 @@ unittest
 
     with(ds2)
     {
-        Nullable!string s;
-        auto q = select(all, author.related!book.title.as("other_book_title")).where(author.lastName, " = ", s.param);
+        import std.range;
+        static struct Optional(T)
+        {
+            Parameter!T value;
+            bool valid = false;
+            alias value this;
+        }
+        Optional!string s;
+        auto q = select(ds2, author.related!book.title.as("other_book_title")).where(author.lastName, " = ", s);
         //pragma(msg, q.RowTypes);
         writeln(q.sql);
         writeln(q.params);
 
-        s = "Alexandrescu";
-        q = select(all, author.books.title.as("other_book_title")).where(author.lastName, " = ", s.param);
+        s.params = only("Alexandrescu");
+        s.valid = true;
+        q = select(allColumns, author.books.title.as("other_book_title")).where(author.lastName, " = ", s);
         writeln(q.sql);
         writeln(q.params);
         writeln(createTableSql!Author);
@@ -209,7 +235,7 @@ unittest
         writeln(i.sql);
         writeln(i.params);
 
-        i = insert(ds.tableDef).set(ds.firstName, "Andrei");
+        i = insert(ds.tableDef).set(ds.firstName, "Andrei".param);
         writeln(i.sql);
         writeln(i.params);
     }

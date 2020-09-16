@@ -2,11 +2,12 @@ module sqlbuilder.dialect.common;
 import sqlbuilder.traits;
 import sqlbuilder.types;
 import std.traits;
+import std.range : empty, popFront, front;
 
 
 // catch-all for things that don't define a dbValue conversion. We also strip
 // any enum types from the value.
-package(sqlbuilder) auto ref dbValue(T)(auto ref T item)
+/*package(sqlbuilder) auto ref dbValue(T)(auto ref T item)
 {
     static if(is(T == enum))
     {
@@ -18,12 +19,40 @@ package(sqlbuilder) auto ref dbValue(T)(auto ref T item)
         pragma(inline, true);
         return item;
     }
-}
+}*/
 
 package void append(T, R)(ref T[] arr, R stuff)
 {
     import std.range : hasLength;
-    static if(is(typeof(arr[0] = stuff.front.dbValue)))
+    static if(is(typeof(arr ~= stuff)))
+    {
+        arr ~= stuff;
+    }
+    else static if(is(typeof(arr[0] = stuff.front)))
+    {
+        static if(hasLength!R)
+        {
+            auto oldLen = arr.length;
+            import std.algorithm : copy;
+            arr.length = oldLen + stuff.length;
+            copy(stuff, arr[oldLen .. $]);
+        }
+        else
+        {
+            foreach(item; stuff)
+            {
+                static if(is(typeof(arr ~= item)))
+                    arr ~= item;
+                else
+                {
+                    // maybe only works with assignment
+                    arr.length = arr.length + 1;
+                    arr[$-1] = item;
+                }
+            }
+        }
+    }
+    /*static if(is(typeof(arr[0] = stuff.front.dbValue)))
     {
         static if(hasLength!R)
         {
@@ -47,7 +76,7 @@ package void append(T, R)(ref T[] arr, R stuff)
                 }
             }
         }
-    }
+    }*/
     else
         static assert(0, "Can't append " ~ R.stringof ~ " to type " ~ T.stringof ~ "[]");
 }
@@ -63,45 +92,6 @@ struct Parameter(T, bool hasValidation = false)
     PType params;
     static if(hasValidation)
         bool valid = true;
-}
-
-auto param(T)(T item)
-{
-    import std.range : only;
-    import std.traits : isInstanceOf;
-    import std.typecons : Nullable;
-    static if(isInstanceOf!(Nullable, T))
-    {
-        alias Val = typeof(item.get());
-        if(item.isNull)
-        {
-            auto result = Parameter!(Val, true)(only(Val.init), false);
-            result.params.popFront;
-            return result;
-        }
-        else
-            return Parameter!(Val, true)(only(item.get), true);
-    }
-    else
-        return Parameter!T(only(item));
-}
-
-unittest 
-{
-    auto p = "hello".param;
-    static assert(is(getParamType!(typeof(p)) == string));
-
-    import std.typecons : Nullable, nullable;
-    Nullable!int x;
-    auto p2 = x.param;
-    static assert(is(getParamType!(typeof(p2)) == int));
-    assert(!p2.valid);
-    assert(p2.params.empty);
-
-    x = 5;
-    p2 = x.param;
-    assert(p2.valid);
-    assert(p2.params.front == 5);
 }
 
 package void addJoin(Item)(ref Joins!Item join, const TableDef def)
@@ -121,15 +111,21 @@ package void addJoin(Item)(ref Joins!Item join, const TableDef def)
     join.expr ~= def.joinExpr;
 }
 
-package void updateQuery(string field, string sep = ", ", Q, Expr...)(ref Q query, Expr expressions) if (isQuery!Q)
+package void updateQuery(string field, bool allowDatasets, Q, Expr...)(ref Q query, Expr expressions) if (isQuery!Q)
 {
-    foreach(e; expressions)
+    foreach(exp; expressions)
     {
+        // convert dataset expressions into the allColumns member (this works
+        // only for selects)
+        static if(allowDatasets && isDataSet!(typeof(exp)))
+            auto e = exp.allColumns;
+        else
+            alias e = exp;
         // add each table dependency to the query
         foreach(tbl; getTables(e))
             query.joins.addJoin(tbl);
         if(__traits(getMember, query, field).expr)
-            __traits(getMember, query, field).expr ~= sep;
+            __traits(getMember, query, field).expr ~= ", ";
         __traits(getMember, query, field).expr ~= e.expr;
         static if(!is(getParamType!(typeof(e)) == void))
             __traits(getMember, query, field).params.append(e.params);
@@ -138,7 +134,7 @@ package void updateQuery(string field, string sep = ", ", Q, Expr...)(ref Q quer
 
 auto select(Q, Cols...)(Q query, Cols columns) if (isQuery!Q)
 {
-    query.updateQuery!"fields"(columns);
+    query.updateQuery!("fields", true)(columns);
     // adjust the query type list according to the columns.
     alias typeList = getQueryTypeList!(Q, Cols);
     static if(!is(typeList == Q.RowTypes))
@@ -152,13 +148,13 @@ auto select(Q, Cols...)(Q query, Cols columns) if (isQuery!Q)
 
 Q orderBy(Q, Expr...)(Q query, Expr expressions) if (isQuery!Q)
 {
-    query.updateQuery!"orders"(expressions);
+    query.updateQuery!("orders", false)(expressions);
     return query;
 }
 
 Q groupBy(Q, Cols...)(Q query, Cols cols) if (isQuery!Q)
 {
-    query.updateQuery!"groups"(cols);
+    query.updateQuery!("groups", false)(cols);
     return query;
 }
 
@@ -174,7 +170,6 @@ auto where(Q, Spec...)(Q query, Spec spec) if (isQuery!Q || is(Q : Update!T, T) 
     import std.array: Appender;
     import std.range : put;
     import std.traits : isSomeString, isInstanceOf;
-    import std.typecons : Nullable;
 
     // static
     foreach(s; spec)
@@ -210,59 +205,6 @@ auto where(Q, Spec...)(Q query, Spec spec) if (isQuery!Q || is(Q : Update!T, T) 
     return query;
 }
 
-auto havingKey(T, Q, Args...)(Q query, T t, Args args)
-    if (isDataSet!T && hasPrimaryKey!(T.RowType) &&
-          Args.length == primaryKeyFields!(T.RowType).length &&
-          !is(Args[0] : T.RowType) &&
-          (
-             isQuery!Q ||
-             is(Q : Update!X, X) ||
-             is(Q : Insert!X, X) ||
-             is(Q : Delete!X, X)
-          )
-       )
-{
-    foreach(i, f; primaryKeyFields!(t.RowType))
-    {
-        query = query.where(__traits(getMember, t, f), " = ", 
-                            args[i].param);
-    }
-    return query;
-}
-
-auto havingKey(T, Q, U)(Q query, T t, U model)
-    if (isDataSet!T && hasPrimaryKey!(T.RowType) && is(U : T.RowType) &&
-          (
-             isQuery!Q ||
-             is(Q : Update!X, X) ||
-             is(Q : Insert!X, X) ||
-             is(Q : Delete!X, X)
-          )
-       )
-{
-    foreach(i, f; primaryKeyFields!(t.RowType))
-    {
-        query = query.where(__traits(getMember, t, f), " = ", 
-                            __traits(getMember, model, f).param);
-    }
-    return query;
-}
-
-auto havingKey(T, Q)(Q query, T t) if (!isDataSet!T && hasPrimaryKey!T)
-{
-    import sqlbuilder.dataset;
-    DataSet!T ds;
-    return query.havingKey(ds, t);
-}
-
-auto havingKey(T, Q, Args...)(Q query, Args args)
-   if (Args.length > 0 && !isDataSet!(Args[0]) && hasPrimaryKey!T)
-{
-    import sqlbuilder.dataset;
-    DataSet!T ds;
-    return query.havingKey(ds, args);
-}
-
 ColumnDef!T as(T)(ColumnDef!T col, string newName)
 {
     return ColumnDef!T(col.table, col.expr ~ " AS " ~ newName.makeSpec(Spec.id));
@@ -281,7 +223,7 @@ ColumnDef!T descend(T)(ColumnDef!T col)
 // template to implement all functions that require a specific parameter type.
 // Making this a template means we can swap out the type that is used as the
 // liason between the database library and our library.
-template SQLImpl(Item)
+template SQLImpl(Item, alias param)
 {
 
     // use ref counting to handle lifetime management for now
@@ -301,6 +243,8 @@ template SQLImpl(Item)
 
     Insert!Item set(Col, Val)(Insert!Item ins, Col column, Val value)
     {
+        if(!getTables(value).empty)
+            throw new Exception("Table dependencies are not allowed for inserting rows");
         static if(is(Col == string))
         {
             if(ins.colNames.expr)
@@ -325,10 +269,9 @@ template SQLImpl(Item)
         // append to the values
         if(ins.colValues.expr)
             ins.colValues.expr ~= ", ";
-        ins.colValues.expr ~= paramSpec;
-        import std.range : only;
-        import std.traits : OriginalType;
-        ins.colValues.params.append(only(cast(OriginalType!Val)value));
+        ins.colValues.expr ~= value.expr;
+        static if(!is(getParamType!(Val) == void))
+            ins.colValues.params.append(value.params);
         return ins;
     }
 
@@ -346,7 +289,7 @@ template SQLImpl(Item)
                       !hasUDA!(__traits(getMember, T, fname), autoIncrement))
             {
                 result = result.set(getColumnName!(__traits(getMember, T, fname)),
-                                    __traits(getMember, item, fname));
+                                    param(__traits(getMember, item, fname)));
             }
         return result;
     }
@@ -393,12 +336,12 @@ template SQLImpl(Item)
                 static if(hasUDA!(__traits(getMember, T, fname), primaryKey))
                 {
                     result = result.where(__traits(getMember, ds, fname), " = ",
-                                          __traits(getMember, item, fname).param);
+                                          param(__traits(getMember, item, fname)));
                 }
                 else
                 {
                     result = result.set(__traits(getMember, ds, fname),
-                                        __traits(getMember, item, fname).param);
+                                        param(__traits(getMember, item, fname)));
                 }
             }
         }
@@ -421,4 +364,56 @@ template SQLImpl(Item)
         return removeFrom(ds.tableDef).havingKey(ds, item);
     }
 
+    auto havingKey(T, Q, U)(Q query, T t, U model)
+        if (isDataSet!T && hasPrimaryKey!(T.RowType) && is(U : T.RowType) &&
+              (
+                 isQuery!Q ||
+                 is(Q : Update!X, X) ||
+                 is(Q : Insert!X, X) ||
+                 is(Q : Delete!X, X)
+              )
+           )
+    {
+        foreach(i, f; primaryKeyFields!(t.RowType))
+        {
+            query = query.where(__traits(getMember, t, f), " = ", 
+                                param(__traits(getMember, model, f)));
+        }
+        return query;
+    }
+
+    auto havingKey(T, Q)(Q query, T t) if (!isDataSet!T && hasPrimaryKey!T)
+    {
+        import sqlbuilder.dataset;
+        DataSet!T ds;
+        return query.havingKey(ds, t);
+    }
+
+    auto havingKey(T, Q, Args...)(Q query, Args args)
+       if (Args.length > 0 && !isDataSet!(Args[0]) && hasPrimaryKey!T)
+    {
+        import sqlbuilder.dataset;
+        DataSet!T ds;
+        return query.havingKey(ds, args);
+    }
+
+    auto havingKey(T, Q, Args...)(Q query, T t, Args args)
+        if (isDataSet!T && hasPrimaryKey!(T.RowType) &&
+              Args.length == primaryKeyFields!(T.RowType).length &&
+              !is(Args[0] : T.RowType) &&
+              (
+                 isQuery!Q ||
+                 is(Q : Update!X, X) ||
+                 is(Q : Insert!X, X) ||
+                 is(Q : Delete!X, X)
+              )
+           )
+    {
+        foreach(i, f; primaryKeyFields!(t.RowType))
+        {
+            query = query.where(__traits(getMember, t, f), " = ", 
+                                param(args[i]));
+        }
+        return query;
+    }
 }

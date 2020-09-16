@@ -1,12 +1,65 @@
 module sqlbuilder.dialect.mysql;
-public import sqlbuilder.dialect.common : param, where, limit, orderBy, groupBy, as, ascend, descend, havingKey;
+public import sqlbuilder.dialect.common : where, limit, orderBy, groupBy, as, ascend, descend, Parameter;
 import sqlbuilder.dialect.common : SQLImpl;
 import sqlbuilder.types;
 import sqlbuilder.traits;
 import std.variant : Variant;
 
+private Variant toVariant(T)(T val)
+{
+    import std.typecons : Nullable;
+    static if(is(T : Nullable!U, U))
+    {
+        if(val.isNull)
+            return Variant(null);
+        return toVariant(val.get);
+    }
+    else static if(is(typeof(val.dbValue)))
+    {
+        return toVariant(val.dbValue);
+    }
+    else static if(is(T == enum))
+    {
+        import std.traits : OriginalType;
+        return Variant(cast(OriginalType!T)val);
+    }
+    else
+    {
+        return Variant(val);
+    }
+}
+
+auto param(T)(T val)
+{
+    import std.range : only;
+    return Parameter!Variant(only(val.toVariant));
+}
+
+auto optional(T)(T val, bool isValid)
+{
+    import std.range : only;
+    return Parameter!(Variant, true)(only(val.toVariant), isValid);
+}
+
+unittest 
+{
+    auto p = "hello".param;
+    static assert(is(getParamType!(typeof(p)) == Variant));
+
+    import std.typecons : Nullable, nullable;
+    Nullable!int x;
+    auto p2 = x.param;
+    static assert(is(getParamType!(typeof(p2)) == Variant));
+    assert(p2.params.front.type == typeid(typeof(null)));
+
+    x = 5;
+    p2 = x.param;
+    assert(p2.params.front.type != typeid(typeof(null)));
+    assert(p2.params.front == 5);
+}
+
 // alias all the items from the implementation template for variant
-alias _impl = SQLImpl!Variant;
+alias _impl = SQLImpl!(Variant, param);
 static foreach(f; __traits(allMembers, _impl))
     mixin("alias " ~ f ~ " = _impl." ~ f ~ ";");
 
@@ -243,11 +296,17 @@ private template dbValueType(T)
     import std.typecons : Nullable;
     static if(is(T : Nullable!U, U))
         alias dbValueType = .dbValueType!U;
-    else
+    else static if(is(typeof(T.init.dbValue)))
     {
-        import sqlbuilder.dialect.common : dbValue;
-        alias dbValueType = typeof(() {return T.init.dbValue;}());
+        alias dbValueType = typeof((){T val = T.init; return val.dbValue;}());
     }
+    else static if(is(T == enum))
+    {
+        import std.traits : OriginalType;
+        alias dbValueType = OriginalType!T;
+    }
+    else
+        alias dbValueType = T;
 }
 
 // match the D type to a specific MySQL type
@@ -341,9 +400,27 @@ template createRelationsSql(T)
             static if(isField!(T, field) && isRelationField!(__traits(getMember, T, field)))
             {
                 // get the relation name
-                enum mapping = getMappingFor!(__traits(getMember, T, field));
+                alias mappings = getMappingsFor!(__traits(getMember, T, field));
                 enum relation = getRelationFor!(__traits(getMember, T, field));
-                result ~= "ALTER TABLE `" ~ getTableName!T ~ "` ADD FOREIGN KEY (`" ~ mapping.key ~ "`) REFERENCES `" ~ getTableName!(relation.foreign_table) ~ "` (`" ~ mapping.foreign_key ~ "`)";
+                string alteration = "ALTER TABLE `" ~ getTableName!T ~ "` ADD FOREIGN KEY (`";
+                //static
+                foreach(i, m; mappings)
+                {
+                    static if(i == 0)
+                        alteration ~= m.key;
+                    else
+                        alteration ~= "`, `" ~ m.key;
+                }
+                alteration ~= "`) REFERENCES `" ~ getTableName!(relation.foreign_table) ~ "` (`";
+                foreach(i, m; mappings)
+                {
+                    static if(i == 0)
+                        alteration ~= m.foreign_key;
+                    else
+                        alteration ~= "`, `" ~ m.foreign_key;
+                }
+                alteration ~= "`)";
+                result ~= alteration;
             }
         }
         return result;
@@ -670,6 +747,13 @@ objSwitch:
     // primary key.
     bool save(T)(Connection conn, T item) if (hasPrimaryKey!T)
     {
+        scope(failure)
+        {
+            import std.stdio;
+            auto upd = update(item);
+            writeln(upd.sql);
+            writeln(upd.params);
+        }
         return conn.perform(update(item)) == 1;
     }
 
@@ -697,10 +781,13 @@ objSwitch:
         static foreach(s; createRelationsSql!Author)
             conn.exec(s);
         static foreach(s; createRelationsSql!book)
+        {
+            writeln(s);
             conn.exec(s);
+        }
         auto steve = conn.create(Author("Steven", "Schveighoffer"));
         auto ds = DataSet!Author();
-        conn.perform(insert(ds.tableDef).set(ds.firstName, "Andrei").set(ds.lastName, "Alexandrescu").set(ds.ynAnswer, MyBool(true)));
+        conn.perform(insert(ds.tableDef).set(ds.firstName, "Andrei".param).set(ds.lastName, Expr(`"Alexandrescu"`)).set(ds.ynAnswer, MyBool(true).param));
         auto andreiId = cast(int)conn.lastInsertID();
         conn.create(book("This Module", steve.id));
         conn.create(book("The D Programming Language", andreiId));
@@ -709,7 +796,7 @@ objSwitch:
         book3.title = "Not so Modern C++ Design";
         book3.book_type = BookType.Fiction;
         assert(conn.save(book3));
-        foreach(auth, book; conn.fetch(select(ds.all, ds.books.all).where(ds.lastName, " = ", "Alexandrescu".param)))
+        foreach(auth, book; conn.fetch(select(ds, ds.books).where(ds.lastName, " = ", "Alexandrescu".param)))
         {
             writeln("author: ", auth, ", book: ", book);
         }
@@ -721,5 +808,20 @@ objSwitch:
         //assert(conn.perform(removeFrom(ds2.tableDef).where(ds2.author.lastName, " = ", "Alexandrescu".param)) == 2);
         assert(conn.perform(removeFrom(ds2.tableDef).havingKey(ds2.author, andreiId)) == 2);
         assert(conn.perform(removeFrom(ds2.tableDef).havingKey(ds2.author, steve)) == 1);
+
+        // generate a table with a null value
+        import sqlbuilder.uda;
+        static struct foo
+        {
+            @primaryKey int id;
+            Nullable!int col1;
+        }
+
+        conn.exec(dropTableSql!foo);
+        conn.exec(createTableSql!foo);
+        conn.exec("INSERT INTO foo (id, col1) VALUES (1, ?)", Nullable!int.init);
+        auto seq1 = conn.query("SELECT * FROM foo WHERE col1 <=> ?", Variant(null));
+        writeln(seq1.colNames);
+        writefln("result from query2: %s", conn.query("SELECT * FROM foo WHERE col1 IS NULL"));
     }
 }
