@@ -1,5 +1,6 @@
 /// UDA items to apply to row structures
 module sqlbuilder.uda;
+import sqlbuilder.types : Spec;
 
 struct tableName
 {
@@ -8,50 +9,56 @@ struct tableName
 
 enum RefType
 {
-    OneToMany,
-    ManyToOne,
-    OneToOne
-}
-
-RefType recip(RefType rt)
-{
-    with(RefType) final switch(rt)
-    {
-    case OneToMany:
-        return ManyToOne;
-    case ManyToOne:
-        return OneToMany;
-    case OneToOne:
-        return OneToOne;
-    }
+    One,
+    Many,
 }
 
 struct TableReference(T)
 {
     alias foreign_table = T;
     string name;
-    RefType type;
+    Spec joinType = Spec.none;
 }
 
-TableReference!T oneToMany(T)(string name = null)
+TableReference!T refersTo(T)(string name = null, Spec joinType = Spec.none)
 {
-    return TableReference!T(name, RefType.OneToMany);
+    return TableReference!T(name, joinType);
 }
 
-TableReference!T manyToOne(T)(string name = null)
-{
-    return TableReference!T(name, RefType.ManyToOne);
-}
-
-TableReference!T oneToOne(T)(string name = null)
-{
-    return TableReference!T(name, RefType.OneToOne);
-}
-
+// this defines a mapping for a relationship. Each item can either represent a
+// field in the foreign table or a literal string to use as the mapping. The
+// library distinguishes between the two by checking to see if the key could be
+// a valid identifier. Typically, literals are not valid identifiers in any
+// SQL.
+//
+// If one key is an identifier, and the other is a literal, then the identifier
+// is always provided first, to allow any relationship to be expressed.
+//
+// The default key is "id", as this is the most common name to map tables with.
+//
+// Only when both fields are identifiers is the '=' operator inserted.
+// Otherwise, the operator must be provided in the literal portion.
+//
+// If the key field is an identifier, and the mapping attribute is attached to
+// an actual column, the field is ignored, and the column name is used instead
+// for the local field. Relations that need multiple column mappings should be
+// specified as Relation types.
+//
+// Examples (assuming ftable = foreign table and ltable = local table):
+//
+// mapping("foo", "bar") => ftable.foo = ltable.bar
+// mapping("foo") => ftable.foo = ltable.id (or ftable.foo = ltable.field when this is attached to a field)
+// mapping("foo", "IS NULL") => ftable.foo IS NULL
+// mapping("foo", "= 7") => ftable.foo = 7
+//
+// note the following reverse the order of expression
+// mapping("IS NULL", "bar") => ltable.bar IS NULL
+// mapping(" = 1", "bar") => ltable.bar = 1
+//
+// mapping("1", " = 0") => 1 = 0 (i.e. never match)
 struct mapping
 {
     string foreign_key = "id";
-    // can leave off if "id" is the key or if applied to a normal column
     string key = "id";
 }
 

@@ -106,8 +106,6 @@ package void addJoin(Item)(ref Joins!Item join, const TableDef def)
     foreach(d; def.dependencies)
         join.addJoin(d);
 
-    if(join.expr)
-        join.expr ~= joinSpec;
     join.expr ~= def.joinExpr;
 }
 

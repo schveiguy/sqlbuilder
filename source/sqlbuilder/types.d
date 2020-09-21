@@ -7,14 +7,17 @@ enum Spec : char
     id = 'i',
     tableid = 't',
     param = 'p',
-    join = 'j',
+    leftJoin = 'L',
+    innerJoin = 'I',
+    rightJoin = 'R',
+    outerJoin = 'O',
     objend = 'o', // denotes the end of an object
     // separator between clauses. Encoded as a spec to allow for optional
     // parentheses
     and = 'a',
 }
 
-enum joinSpec = "\\" ~ Spec.join;
+enum joinSpec = "\\" ~ Spec.leftJoin;
 
 enum paramSpec = "\\" ~ Spec.param;
 
@@ -29,6 +32,33 @@ Spec getSpec(const(char)[] s)
         return cast(Spec)(s[1]);
     }
     return Spec.none;
+}
+
+bool isJoin(Spec s)
+{
+    return s == Spec.leftJoin ||
+        s == Spec.rightJoin ||
+        s == Spec.innerJoin ||
+        s == Spec.outerJoin;
+}
+
+package bool isKeyLiteral(string val)
+{
+    // returns true if any character inside val cannot be an identifier
+    if(val.length == 0)
+        return false;
+    import std.utf;
+    import std.uni;
+    auto checkme = val.byDchar;
+    if(!(checkme.front == '_' || checkme.front.isAlpha))
+        return true;
+    checkme.popFront;
+    foreach(c; checkme)
+    {
+        if(!(c == '_' || c.isAlphaNum))
+            return true;
+    }
+    return false;
 }
 
 struct ExprString
@@ -115,8 +145,23 @@ string makeSpec(string value, Spec spec)
     return "\\" ~ spec ~ value;
 }
 
+string makeSpec(Spec spec)
+{
+    return "\\" ~ spec;
+}
+
 struct TableDef
 {
+    @property Spec joinType() const
+    {
+        if(joinExpr.data.length)
+        {
+            auto s = getSpec(joinExpr.data[0]);
+            return s.isJoin ? s : Spec.none;
+        }
+        return Spec.none;
+    }
+
     string as; // table name used in the expression
     ExprString joinExpr; // join expression defines the relationship and the table name
     const(TableDef)[] dependencies; // tables that must be included first
@@ -172,7 +217,7 @@ struct Query(Item, RowT...)
     // allow forgetting all the row types.
     static if(RowT.length > 1 || (RowT.length == 1 && !is(RowT[0] == void)))
     {
-        ref .Query!Item basicQuery() return @trusted
+        .Query!Item basicQuery() return @trusted
         {
             return *cast(.Query!Item*)&this;
         }

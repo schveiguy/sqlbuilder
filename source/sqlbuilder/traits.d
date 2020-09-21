@@ -124,7 +124,7 @@ template getRelationFor(alias sym)
         static if(is(typeof(u)) && isInstanceOf!(TableReference, typeof(u)))
         {
             static if(u.name == null)
-                enum result = typeof(u)(__traits(identifier, sym), u.type);
+                enum result = typeof(u)(__traits(identifier, sym));
             else
                 enum result = u;
         }
@@ -149,9 +149,15 @@ template getMappingsFor(alias sym)
             static if(is(typeof(sym) == Relation))
                 enum result = Params[0];
             else
+            {
                 // mapping attached to a field, use the name of the field
                 // instead of the key.
-                enum result = mapping(Params[0].foreign_key, getColumnName!(__traits(identifier, sym)));
+                static if(isKeyLiteral(Params[0].key))
+                    enum result = Params[0];
+                else
+                    // ignore any name there, just use the actual field name.
+                    enum result = mapping(Params[0].foreign_key, __traits(identifier, sym));
+            }
             alias m_list = AliasSeq!(result, m_list!(Params[1 .. $]));
         }
         else
@@ -168,7 +174,7 @@ template getMappingsFor(alias sym)
         static if(is(typeof(sym) == Relation))
             alias getMappingsFor = AliasSeq!(mapping.init);
         else
-            enum getMappingsFor = AliasSeq!(mapping(mapping.init.foreign_key, getColumnName!(sym)));
+            enum getMappingsFor = AliasSeq!(mapping(mapping.init.foreign_key, __traits(identifier, sym)));
     }
 }
 

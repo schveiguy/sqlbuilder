@@ -87,8 +87,17 @@ private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, A
             put(app, "`.");
         }
         break;
-    case join: // TODO: implement other joins
+    case leftJoin:
         put(app, " LEFT JOIN ");
+        break;
+    case rightJoin:
+        put(app, " RIGHT JOIN ");
+        break;
+    case innerJoin:
+        put(app, " INNER JOIN ");
+        break;
+    case outerJoin:
+        put(app, " OUTER JOIN ");
         break;
     case param:
         put(app, '?');
@@ -252,7 +261,7 @@ string sql(Item)(Delete!Item del)
     // if there is at least one join, we have to change the syntax
     import std.algorithm : canFind;
     put(app, "DELETE ");
-    if(del.joins.expr.data.canFind!(s => s.getSpec == Spec.join))
+    if(del.joins.expr.data.canFind!(s => s.getSpec.isJoin))
     {
         // get the first table
         sqlPut!(false, true)(app, ExprString(del.joins.expr.data[0 .. 1]));
@@ -406,18 +415,16 @@ template createRelationsSql(T)
                 //static
                 foreach(i, m; mappings)
                 {
-                    static if(i == 0)
-                        alteration ~= m.key;
-                    else
-                        alteration ~= "`, `" ~ m.key;
+                    static if(i != 0)
+                        alteration ~= "`, `";
+                    alteration ~= getColumnName!(__traits(getMember, T, m.key));
                 }
                 alteration ~= "`) REFERENCES `" ~ getTableName!(relation.foreign_table) ~ "` (`";
                 foreach(i, m; mappings)
                 {
-                    static if(i == 0)
-                        alteration ~= m.foreign_key;
-                    else
-                        alteration ~= "`, `" ~ m.foreign_key;
+                    static if(i != 0)
+                        alteration ~= "`, `";
+                    alteration ~= getColumnName!(__traits(getMember, relation.foreign_table, m.foreign_key));
                 }
                 alteration ~= "`)";
                 result ~= alteration;

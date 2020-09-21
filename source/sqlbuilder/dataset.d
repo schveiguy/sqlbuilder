@@ -4,21 +4,42 @@ import sqlbuilder.uda;
 import sqlbuilder.types;
 import sqlbuilder.traits;
 
-TableDef buildTableDef(alias relation, mappings...)(TableDef dependency)
+TableDef buildTableDef(T, alias relation, mappings...)(Spec joinType, TableDef dependency)
 {
-    auto tableid = makeSpec(dependency.as ~ "_" ~ relation.name, Spec.tableid);
+    assert(isJoin(joinType), "Error, invalid spec for join with dependencies: " ~ joinType);
+    auto tableid = makeSpec(dependency.as ~ "_" ~ joinType ~ "_" ~ relation.name, Spec.tableid);
     auto deptable = dependency.as.makeSpec(Spec.tableid);
-    auto expr = ExprString(getTableName!(relation.foreign_table).makeSpec(Spec.id),
+    auto expr = ExprString(makeSpec(joinType), getTableName!(relation.foreign_table).makeSpec(Spec.id),
         " AS ", tableid[2 .. $].makeSpec(Spec.id), " ON (");
-    // static
-    foreach(i, mapping; mappings)
+
+    static string genKeyId(T, string fieldname)()
     {
-        static if(i == 0)
-            expr ~= ExprString(tableid, mapping.foreign_key.makeSpec(Spec.id),
-                   " = ", deptable, mapping.key.makeSpec(Spec.id));
+        return getColumnName!(__traits(getMember, T, fieldname)).makeSpec(Spec.id);
+    }
+
+    // static
+    foreach(i, m; mappings)
+    {
+        static if(i != 0)
+            expr ~= " AND ";
+        static if(isKeyLiteral(m.foreign_key))
+        {
+            // the foreign key is a value, which means we need to put it into
+            // the expression as-is. However, if the key is not a value, we
+            // need to swap the order.
+            static if(isKeyLiteral(m.key))
+            {
+                expr ~= ExprString(m.foreign_key, m.key);
+            }
+            else
+            {
+                expr ~= ExprString(deptable, genKeyId!(T, m.key), m.foreign_key);
+            }
+        }
+        else static if(isKeyLiteral(m.key))
+            expr ~= ExprString(tableid, genKeyId!(relation.foreign_table, m.foreign_key), m.key);
         else
-            expr ~= ExprString(" AND ", tableid, mapping.foreign_key.makeSpec(Spec.id),
-                   " = ", deptable, mapping.key.makeSpec(Spec.id));
+            expr ~= ExprString(tableid, genKeyId!(relation.foreign_table, m.foreign_key), " = ", deptable, genKeyId!(T, m.key));
     }
 
     expr ~= ")";
@@ -39,9 +60,9 @@ TableDef buildTableDef(T)(string rootName = null)
     return TableDef(rootName, expr);
 }
 
-template staticTableDef(alias relation, TableDef dependency, m...)
+template staticTableDef(T, alias relation, Spec joinType, TableDef dependency, m...)
 {
-    static const TableDef staticTableDef = buildTableDef!(relation, m)(dependency);
+    static const TableDef staticTableDef = buildTableDef!(T, relation, m)(joinType, dependency);
 }
 
 template staticTableDef(T)
@@ -69,7 +90,16 @@ struct DataSet(T, alias core)
 {
     alias RowType = T;
     enum tableDef = core;
-    enum anyNull = core.dependencies.length != 0;
+    static private bool _checkForLeftJoins(const TableDef td)
+    {
+        if(td.joinType == Spec.leftJoin) return true;
+        foreach(dep; td.dependencies)
+            if(_checkForLeftJoins(dep)) return true;
+        return false;
+    }
+
+    enum anyNull = _checkForLeftJoins(core);
+
     @property auto opDispatch(string item)() if (isField!(T, item))
     {
         // This is a column of the row, so just build the correct column definition.
@@ -83,15 +113,19 @@ struct DataSet(T, alias core)
         return col;
     }
 
-    @property auto opDispatch(string item)() if (isRelation!(T, item))
+    template opDispatch(string item) if (isRelation!(T, item))
     {
-        // this is a relationship, use the UDAs assigned to the appropriate
-        // item to generate the new dataset.
-        enum field = getRelationField!(T, item);
-        static assert(field != null);
-        enum relation = getRelationFor!(__traits(getMember, T, field));
-        alias m = getMappingsFor!(__traits(getMember, T, field));
-        return .DataSet!(relation.foreign_table, staticTableDef!(relation, core, m)).init;
+        @property auto opDispatch(Spec joinType = Spec.none)() if (joinType == joinType.none || isJoin(joinType))
+        {
+            // this is a relationship, use the UDAs assigned to the appropriate
+            // item to generate the new dataset.
+            enum field = getRelationField!(T, item);
+            static assert(field != null);
+            enum relation = getRelationFor!(__traits(getMember, T, field));
+            alias m = getMappingsFor!(__traits(getMember, T, field));
+            enum realJoinType = joinType == Spec.none ? Spec.leftJoin : joinType;
+            return .DataSet!(relation.foreign_table, staticTableDef!(T, relation, realJoinType, core, m)).init;
+        }
     }
 
     // shortcut for all columns
@@ -119,7 +153,7 @@ struct DataSet(T, alias core)
 // The join name is kind of convoluted, but hard to make a unique one that
 // reads well in English. perhaps this can be improved (maybe reverse the table
 // definitions up to that point).
-auto related(T, string relationName = null, DS1)(DS1 dataset) if (isDataSet!DS1)
+auto related(T, string relationName = null, Spec joinType = Spec.none, DS1)(DS1 dataset) if (isDataSet!DS1 && (joinType == Spec.none || isJoin(joinType)))
 {
     static if(relationName.length)
     {
@@ -146,8 +180,9 @@ auto related(T, string relationName = null, DS1)(DS1 dataset) if (isDataSet!DS1)
     }
     alias mappings = staticMap!(recipMapping, getMappingsFor!(__traits(getMember, T, relatedField)));
     enum revRelation = getRelationFor!(__traits(getMember, T, relatedField));
-    enum relation = TableReference!T(getTableName!T ~ "_having_" ~ revRelation.name, revRelation.type.recip);
-    return DataSet!(T, staticTableDef!(relation, dataset.tableDef, mappings)).init;
+    enum relation = TableReference!T(getTableName!T ~ "_having_" ~ revRelation.name);
+    enum realJoin = joinType == Spec.none ? Spec.leftJoin : joinType;
+    return DataSet!(T, staticTableDef!(revRelation.foreign_table, relation, realJoin, dataset.tableDef, mappings)).init;
 }
 
 version(unittest)
@@ -171,7 +206,8 @@ version(unittest)
         @colType("VARCHAR(1)") MyBool ynAnswer;
 
         // relations
-        static @mapping("auth_id") @oneToMany!book() Relation books;
+        static @mapping("author_id") @refersTo!book() Relation books;
+        static @mapping("author_id") @mapping("book_type", " = 0") @refersTo!book() Relation referenceBooks;
     }
 
     enum BookType {
@@ -181,7 +217,7 @@ version(unittest)
     static struct book
     {
         @unique @colName("name") @colType("VARCHAR(100)") string title;
-        @manyToOne!Author("author") @colName("auth_id") int author_id;
+        @refersTo!Author("author") @colName("auth_id") int author_id;
         BookType book_type;
         @primaryKey @autoIncrement int id = -1;
     }
@@ -201,6 +237,9 @@ unittest
         //writeln(q);
         writeln(q.sql);
         writeln(q.params);
+        auto q2 = select(ds, referenceBooks.title).where(lastName, " = ", "Alexandrescu".param).orderBy(referenceBooks.title);
+        writeln(q2.sql);
+        writeln(q2.params);
     }
 
     DataSet!(book) ds2;
@@ -218,13 +257,15 @@ unittest
         auto q = select(ds2, author.related!book.title.as("other_book_title")).where(author.lastName, " = ", s);
         //pragma(msg, q.RowTypes);
         writeln(q.sql);
+        writeln(q.RowTypes.stringof);
         writeln(q.params);
 
         s.params = only("Alexandrescu");
         s.valid = true;
-        q = select(allColumns, author.books.title.as("other_book_title")).where(author.lastName, " = ", s);
-        writeln(q.sql);
-        writeln(q.params);
+        auto q2 = select(allColumns, ds2.author!(Spec.innerJoin).books!(Spec.innerJoin).title.as("other_book_title")).where(ds2.author.lastName, " = ", s);
+        writeln(q2.sql);
+        writeln(q2.RowTypes.stringof);
+        writeln(q2.params);
         writeln(createTableSql!Author);
         writeln(createTableSql!book);
     }
@@ -259,7 +300,7 @@ unittest
         d = removeFrom(ds.tableDef).havingKey(Author("Steven", "Schveighoffer", 1));
         writeln(d.sql);
         writeln(d.params);
-        d = removeFrom(ds.tableDef).havingKey(ds.books, 1);
+        d = removeFrom(ds.tableDef).havingKey(ds.books!(Spec.innerJoin), 1);
         writeln(d.sql);
         writeln(d.params);
         d = removeFrom(ds.tableDef).havingKey!Author(1);
