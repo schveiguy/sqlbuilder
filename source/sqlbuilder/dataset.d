@@ -123,7 +123,7 @@ struct DataSet(T, alias core)
             static assert(field != null);
             enum relation = getRelationFor!(__traits(getMember, T, field));
             alias m = getMappingsFor!(__traits(getMember, T, field));
-            enum realJoinType = joinType == Spec.none ? Spec.leftJoin : joinType;
+            enum realJoinType = joinType == Spec.none ? (relation.joinType == Spec.none ? Spec.leftJoin : relation.joinType) : joinType;
             return .DataSet!(relation.foreign_table, staticTableDef!(T, relation, realJoinType, core, m)).init;
         }
     }
@@ -176,12 +176,12 @@ auto related(T, string relationName = null, Spec joinType = Spec.none, DS1)(DS1 
     import std.meta : staticMap;
     template recipMapping(mapping m)
     {
-        enum recipMapping = m.recip;
+        enum recipMapping = mapping(m.key, m.foreign_key);
     }
     alias mappings = staticMap!(recipMapping, getMappingsFor!(__traits(getMember, T, relatedField)));
     enum revRelation = getRelationFor!(__traits(getMember, T, relatedField));
-    enum relation = TableReference!T(getTableName!T ~ "_having_" ~ revRelation.name);
-    enum realJoin = joinType == Spec.none ? Spec.leftJoin : joinType;
+    enum relation = TableReference!T(getTableName!T ~ "_having_" ~ revRelation.name, revRelation.joinType);
+    enum realJoin = joinType == Spec.none ? (relation.joinType == Spec.none ? Spec.leftJoin : relation.joinType) : joinType;
     return DataSet!(T, staticTableDef!(revRelation.foreign_table, relation, realJoin, dataset.tableDef, mappings)).init;
 }
 
@@ -217,7 +217,7 @@ version(unittest)
     static struct book
     {
         @unique @colName("name") @colType("VARCHAR(100)") string title;
-        @refersTo!Author("author") @colName("auth_id") int author_id;
+        @refersTo!Author("author", Spec.innerJoin) @colName("auth_id") int author_id;
         BookType book_type;
         @primaryKey @autoIncrement int id = -1;
     }
@@ -262,7 +262,7 @@ unittest
 
         s.params = only("Alexandrescu");
         s.valid = true;
-        auto q2 = select(allColumns, ds2.author!(Spec.innerJoin).books!(Spec.innerJoin).title.as("other_book_title")).where(ds2.author.lastName, " = ", s);
+        auto q2 = select(allColumns, ds2.author.books!(Spec.innerJoin).title.as("other_book_title")).where(ds2.author.lastName, " = ", s);
         writeln(q2.sql);
         writeln(q2.RowTypes.stringof);
         writeln(q2.params);

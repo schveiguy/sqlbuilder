@@ -62,11 +62,6 @@ struct mapping
     string key = "id";
 }
 
-mapping recip(mapping m)
-{
-    return mapping(m.key, m.foreign_key);
-}
-
 // specify a different column name for a field. By default, the field's name is
 // used.
 struct colName
