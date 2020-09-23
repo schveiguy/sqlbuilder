@@ -55,7 +55,9 @@ template isField(T, string item)
     // TODO: we ignore functions for now, but possibly we may want to include them.
     static if(__traits(hasMember, T, item))
     {
-        enum isField = !hasStaticMember!(T, item) &&
+        enum isField = !__traits(compiles, () {
+                auto x = __traits(getMember, T, item);
+            }) &&
             !hasUDA!(__traits(getMember, T, item), ignore) &&
             !is(typeof(__traits(getMember, T, item)) == Relation) &&
             !is(typeof(__traits(getMember, T, item)) == function);

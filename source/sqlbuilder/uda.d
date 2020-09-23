@@ -7,6 +7,27 @@ struct tableName
     string name;
 }
 
+struct AllowNull(T)
+{
+    T nullValue;
+}
+
+// Allow null for a specific field that is not typed as Nullable!T.
+//
+// If val is provided, then it is used as the substitute for the null value. If
+// not provided, (i.e. @allowNull is the attribute), then the init value of the
+// column type is used instead.
+//
+// With this attribute, null values will never be inserted into the database
+// using a blueprint or model. But it's still possible to set values to null.
+// Create table statements will treat a column that has an allowNull attribute
+// as nullable.
+//
+AllowNull!T allowNull(T)(T val)
+{
+    return AllowNull!T(val);
+}
+
 enum RefType
 {
     One,

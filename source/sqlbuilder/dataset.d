@@ -221,6 +221,12 @@ version(unittest)
         BookType book_type;
         @primaryKey @autoIncrement int id = -1;
     }
+    static struct review
+    {
+        @refersTo!book("book") int book_id;
+        @allowNull string comment;
+        @allowNull(-1) int rating;
+    }
 }
 
 unittest

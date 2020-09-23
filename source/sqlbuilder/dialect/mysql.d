@@ -524,7 +524,29 @@ version(Have_mysql_native)
             {
                 if(colIds[idx] != size_t.max)
                 {
-                    __traits(getMember, result, n) = getLeaf!(typeof(__traits(getMember, result, n)))(r[colIds[idx]]);
+                    import sqlbuilder.uda;
+                    alias mem = __traits(getMember, T, n);
+
+                    static foreach(alias att; __traits(getAttributes, mem))
+                    {
+                        static if(__traits(isSame, att, allowNull))
+                            enum nullValue = typeof(mem).init;
+                        else static if(is(typeof(att) : AllowNull!U, U))
+                            enum nullValue = att.nullValue;
+
+                    }
+
+                    static if(is(typeof(nullValue)))
+                    {
+                        // use Nullable!X to get the data
+                        auto v = getLeaf!(Nullable!(typeof(mem)))(r[colIds[idx]]);
+                        __traits(getMember, result, n) = v.get(nullValue);
+                    }
+                    else
+                    {
+                        __traits(getMember, result, n) = getLeaf!(typeof(mem))(r[colIds[idx]]);
+                    //__traits(getMember, result, n) = getLeaf!(typeof(__traits(getMember, result, n)))(r[colIds[idx]]);
+                    }
                 }
             }
             return result;
@@ -781,9 +803,12 @@ objSwitch:
         conn.exec("SET FOREIGN_KEY_CHECKS = 0");
         conn.exec(dropTableSql!Author);
         conn.exec(dropTableSql!book);
+        conn.exec(dropTableSql!review);
         conn.exec("SET FOREIGN_KEY_CHECKS = 1");
         conn.exec(createTableSql!Author);
         conn.exec(createTableSql!book);
+
+        // build the review table manually, to add nulls directly
         import std.stdio;
         static foreach(s; createRelationsSql!Author)
             conn.exec(s);
@@ -792,6 +817,7 @@ objSwitch:
             writeln(s);
             conn.exec(s);
         }
+        conn.exec("CREATE TABLE `review` (`book_id` INT NOT NULL, `comment` TEXT, `rating` INT)");
         auto steve = conn.create(Author("Steven", "Schveighoffer"));
         auto ds = DataSet!Author();
         conn.perform(insert(ds.tableDef).set(ds.firstName, "Andrei".param).set(ds.lastName, Expr(`"Alexandrescu"`)).set(ds.ynAnswer, MyBool(true).param));
@@ -826,6 +852,9 @@ objSwitch:
 
         conn.exec(dropTableSql!foo);
         conn.exec(createTableSql!foo);
+        auto rds = DataSet!review.init;
+        conn.perform(insert(rds.tableDef).set(rds.book_id, 1.param));
+        writeln(conn.fetch(select(rds)));
         conn.exec("INSERT INTO foo (id, col1) VALUES (1, ?)", Nullable!int.init);
         auto seq1 = conn.query("SELECT * FROM foo WHERE col1 <=> ?", Variant(null));
         writeln(seq1.colNames);
