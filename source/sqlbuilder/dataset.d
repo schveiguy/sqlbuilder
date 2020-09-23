@@ -274,6 +274,7 @@ unittest
         writeln(q2.params);
         writeln(createTableSql!Author);
         writeln(createTableSql!book);
+        writeln(createTableSql!review);
     }
 
     // try some inserts

@@ -360,7 +360,7 @@ template createTableSql(T)
                     result ~= colTypeUDAs[0].type;
                 else
                     result ~= getFieldType!fieldType;
-                static if(!isInstanceOf!(Nullable, fieldType))
+                static if(!possibleNullColumn!(__traits(getMember, T, field)))
                     result ~= " NOT NULL";
                 static if(hasUDA!(__traits(getMember, T, field), unique))
                     result ~= " UNIQUE";
@@ -817,7 +817,8 @@ objSwitch:
             writeln(s);
             conn.exec(s);
         }
-        conn.exec("CREATE TABLE `review` (`book_id` INT NOT NULL, `comment` TEXT, `rating` INT)");
+        //conn.exec("CREATE TABLE `review` (`book_id` INT NOT NULL, `comment` TEXT, `rating` INT)");
+        conn.exec(createTableSql!review);
         auto steve = conn.create(Author("Steven", "Schveighoffer"));
         auto ds = DataSet!Author();
         conn.perform(insert(ds.tableDef).set(ds.firstName, "Andrei".param).set(ds.lastName, Expr(`"Alexandrescu"`)).set(ds.ynAnswer, MyBool(true).param));

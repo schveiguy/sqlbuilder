@@ -283,3 +283,39 @@ template primaryKeyFields(T)
 }
 
 enum hasPrimaryKey(T) = primaryKeyFields!T.length > 0;
+
+template possibleNullColumn(alias sym)
+{
+    import std.typecons : Nullable;
+    static if(is(typeof(sym) : Nullable!T, T))
+        enum possibleNullColumn = true;
+    else
+    {
+        static foreach(alias att; __traits(getAttributes, sym))
+        {
+            static if(__traits(isSame, att, allowNull) || is(typeof(att) : AllowNull!T, T))
+                enum result = true;
+        }
+        static if(is(typeof(result)))
+            enum possibleNullColumn = result;
+        else
+            enum possibleNullColumn = false;
+    }
+}
+
+unittest
+{
+    import std.typecons : Nullable;
+    static struct TestRow
+    {
+        Nullable!int n1;
+        @allowNull int n2;
+        @allowNull(5) int n3;
+        int v1;
+    }
+
+    static assert(possibleNullColumn!(TestRow.n1));
+    static assert(possibleNullColumn!(TestRow.n2));
+    static assert(possibleNullColumn!(TestRow.n3));
+    static assert(!possibleNullColumn!(TestRow.v1));
+}
