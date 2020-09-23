@@ -84,7 +84,7 @@ template getRelationField(T, string item)
         static foreach(f; __traits(allMembers, T))
             static foreach(u; __traits(getAttributes, __traits(getMember, T, f)))
             {
-                static if(is(typeof(u)) && isInstanceOf!(TableReference, typeof(u)) && u.name == item)
+                static if(is(typeof(u)) && isInstanceOf!(refersTo, typeof(u)) && u.name == item)
                     enum result = f;
             }
         static if(is(typeof(result)))
@@ -102,7 +102,7 @@ template getRelationField(T, U)
     static foreach(f; __traits(allMembers, T))
         static foreach(u; __traits(getAttributes, __traits(getMember, T, f)))
         {
-            static if(is(typeof(u)) && isInstanceOf!(TableReference, typeof(u)) && is(u.foreign_table == U))
+            static if(is(typeof(u)) && isInstanceOf!(refersTo, typeof(u)) && is(u.foreign_table == U))
             {
                 static if(is(typeof(result)))
                     static assert(0, "Multiple relations exist for " ~ T.stringof ~ " to " ~ U.stringof);
@@ -120,16 +120,17 @@ enum isRelation(T, string item) = getRelationField!(T, item) != null;
 
 template getRelationFor(alias sym)
 {
-    private import std.traits;
     static foreach(u; __traits(getAttributes, sym))
     {
-        static if(is(typeof(u)) && isInstanceOf!(TableReference, typeof(u)))
+        static if(is(typeof(u) : refersTo!T, T))
         {
             static if(u.name == null)
                 enum result = typeof(u)(__traits(identifier, sym));
             else
                 enum result = u;
         }
+        static if(is(u : refersTo!T, T))
+            enum result = u(__traits(identifier, sym));
     }
     static if(is(typeof(result)))
         enum getRelationFor = result;
@@ -137,7 +138,7 @@ template getRelationFor(alias sym)
         alias getRelationFor = void;
 }
 
-enum isRelationField(alias sym) = is(typeof(getRelationFor!sym) == TableReference!U, U);
+enum isRelationField(alias sym) = is(typeof(getRelationFor!sym) == refersTo!U, U);
 
 template getMappingsFor(alias sym)
 {

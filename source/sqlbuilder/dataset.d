@@ -180,7 +180,7 @@ auto related(T, string relationName = null, Spec joinType = Spec.none, DS1)(DS1 
     }
     alias mappings = staticMap!(recipMapping, getMappingsFor!(__traits(getMember, T, relatedField)));
     enum revRelation = getRelationFor!(__traits(getMember, T, relatedField));
-    enum relation = TableReference!T(getTableName!T ~ "_having_" ~ revRelation.name, revRelation.joinType);
+    enum relation = refersTo!T(getTableName!T ~ "_having_" ~ revRelation.name, revRelation.joinType);
     enum realJoin = joinType == Spec.none ? (relation.joinType == Spec.none ? Spec.leftJoin : relation.joinType) : joinType;
     return DataSet!(T, staticTableDef!(revRelation.foreign_table, relation, realJoin, dataset.tableDef, mappings)).init;
 }
@@ -206,8 +206,8 @@ version(unittest)
         @colType("VARCHAR(1)") MyBool ynAnswer;
 
         // relations
-        static @mapping("author_id") @refersTo!book() Relation books;
-        static @mapping("author_id") @mapping("book_type", " = 0") @refersTo!book() Relation referenceBooks;
+        static @mapping("author_id") @refersTo!book Relation books;
+        static @mapping("author_id") @mapping("book_type", " = 0") @refersTo!book Relation referenceBooks;
     }
 
     enum BookType {

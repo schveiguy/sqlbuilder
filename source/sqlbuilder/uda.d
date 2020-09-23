@@ -34,17 +34,18 @@ enum RefType
     Many,
 }
 
-struct TableReference(T)
+struct refersTo(T)
 {
     alias foreign_table = T;
     string name;
     Spec joinType = Spec.none;
 }
 
-TableReference!T refersTo(T)(string name = null, Spec joinType = Spec.none)
+//alias refersTo = TableReference;
+/*TableReference!T refersTo(T)(string name = null, Spec joinType = Spec.none)
 {
     return TableReference!T(name, joinType);
-}
+}*/
 
 // this defines a mapping for a relationship. Each item can either represent a
 // field in the foreign table or a literal string to use as the mapping. The
