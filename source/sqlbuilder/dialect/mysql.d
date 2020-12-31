@@ -1,5 +1,5 @@
 module sqlbuilder.dialect.mysql;
-public import sqlbuilder.dialect.common : where, limit, orderBy, groupBy, as, ascend, descend, Parameter;
+public import sqlbuilder.dialect.common : where, limit, orderBy, groupBy, as, count, ascend, descend, Parameter;
 import sqlbuilder.dialect.common : SQLImpl;
 import sqlbuilder.types;
 import sqlbuilder.traits;
@@ -731,6 +731,20 @@ objSwitch:
         return r.empty ? defaultValue : r.front;
     }
 
+    auto fetchUsingKey(T, bool throwOnExtraColumns = false, Args...)(Connection conn, Args args) if (hasPrimaryKey!T && Args.length == primaryKeyFields!T.length)
+    {
+        import sqlbuilder.dataset;
+        DataSet!T ds;
+        return conn.fetchOne!throwOnExtraColumns(select(ds).havingKey(ds, args));
+    }
+
+    auto fetchUsingKey(T, bool throwOnExtraColumns = false, Args...)(Connection conn, T defaultValue, Args args) if (hasPrimaryKey!T && Args.length == primaryKeyFields!T.length)
+    {
+        import sqlbuilder.dataset;
+        DataSet!T ds;
+        return conn.fetchOne!throwOnExtraColumns(select(ds).havingKey(ds, args), defaultValue);
+    }
+
     // returns the rows affected
     long perform(Q)(Connection conn, Q stmt) if(is(Q : Insert!P, P) ||
                                                 is(Q : Update!P, P) ||
@@ -752,7 +766,7 @@ objSwitch:
         }
     }
 
-    T create(T)(Connection conn, T blueprint)
+    auto ref T create(T)(Connection conn, auto ref T blueprint)
     {
         import mysql.commands;
         import std.traits;

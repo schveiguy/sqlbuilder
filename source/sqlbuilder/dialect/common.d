@@ -208,6 +208,11 @@ ColumnDef!T as(T)(ColumnDef!T col, string newName)
     return ColumnDef!T(col.table, col.expr ~ " AS " ~ newName.makeSpec(Spec.id));
 }
 
+ColumnDef!long count(T)(ColumnDef!T col)
+{
+    return ColumnDef!long(col.table, ExprString("COUNT(" ~ col.expr.data ~ ")"));
+}
+
 ColumnDef!T ascend(T)(ColumnDef!T col)
 {
     return ColumnDef!T(col.table, col.expr ~ " ASC");
