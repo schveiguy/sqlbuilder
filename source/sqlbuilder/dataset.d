@@ -29,15 +29,15 @@ TableDef buildTableDef(T, alias relation, mappings...)(Spec joinType, TableDef d
             // need to swap the order.
             static if(isKeyLiteral(m.key))
             {
-                expr ~= ExprString(m.foreign_key, m.key);
+                expr ~= ExprString(m.foreign_key, " ", m.key);
             }
             else
             {
-                expr ~= ExprString(deptable, genKeyId!(T, m.key), m.foreign_key);
+                expr ~= ExprString(deptable, genKeyId!(T, m.key), " ", m.foreign_key);
             }
         }
         else static if(isKeyLiteral(m.key))
-            expr ~= ExprString(tableid, genKeyId!(relation.foreign_table, m.foreign_key), m.key);
+            expr ~= ExprString(tableid, genKeyId!(relation.foreign_table, m.foreign_key), " ", m.key);
         else
             expr ~= ExprString(tableid, genKeyId!(relation.foreign_table, m.foreign_key), " = ", deptable, genKeyId!(T, m.key));
     }
