@@ -1,6 +1,6 @@
 # SQL Builder and database serializer
 
-sqlbuilder is a small library that is used to make sql easier to write. It also can serve as an abstraction layer for multiple database implementations. Currently, only MySQL is supported, but it has been designed to allow for PostgreSQL and SQLite support. Other systems may also fit within the system, but I have not focused on anything other than those three.
+sqlbuilder is a small library that is used to make dynamically created sql easier to write. It also can serve as an abstraction layer for multiple database implementations. Currently, only MySQL is supported, but it has been designed to allow for PostgreSQL and SQLite support. Other systems may also fit within the system, but I have not focused on anything other than those three.
 
 ## Implemented Features
 

@@ -1,8 +1,10 @@
 module sqlbuilder.dialect.mysql;
-public import sqlbuilder.dialect.common : where, limit, orderBy, groupBy, as, count, ascend, descend, Parameter;
+public import sqlbuilder.dialect.common : where, changed, limit, orderBy, groupBy, exprCol, as, concat, count, ascend, descend, Parameter;
 import sqlbuilder.dialect.common : SQLImpl;
 import sqlbuilder.types;
 import sqlbuilder.traits;
+import sqlbuilder.util;
+
 import std.variant : Variant;
 
 private Variant toVariant(T)(T val)
@@ -65,11 +67,26 @@ static foreach(f; __traits(allMembers, _impl))
 
 private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, App)(ref App app, ExprString expr)
 {
+    BitStack andor;
+    andor.push(true); // default to and
     foreach(x; expr.data)
-        sqlPut!(includeObjectSeparators, includeTableQualifiers)(app, x);
+        sqlPut!(includeObjectSeparators, includeTableQualifiers)(app, x, andor);
+}
+
+private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, App)(ref App app, ExprString expr, ref BitStack andor)
+{
+    foreach(x; expr.data)
+        sqlPut!(includeObjectSeparators, includeTableQualifiers)(app, x, andor);
 }
 
 private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, App)(ref App app, string x)
+{
+    BitStack andor;
+    andor.push(true); // default to and
+    sqlPut!(includeObjectSeparators, includeTableQualifiers)(app, x, andor);
+}
+
+private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, App)(ref App app, string x, ref BitStack andor)
 {
     import std.range : put;
     with(Spec) switch(getSpec(x))
@@ -109,8 +126,25 @@ private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, A
         static if(includeObjectSeparators)
             put(app, ", 1 AS `_objend`");
         break;
-    case and:
-        put(app, ") AND (");
+    case separator:
+        if(andor.peek)
+            put(app, ") AND (");
+        else
+            put(app, ") OR (");
+        break;
+    case beginAnd:
+        andor.push(true);
+        put(app, "(");
+        break;
+    case beginOr:
+        andor.push(false);
+        put(app, "(");
+        break;
+    case endGroup:
+        if(!andor.length)
+            throw new Exception("Error, inconsistent groupings");
+        andor.pop;
+        put(app, ")");
         break;
     default:
         throw new Exception("Unknown spec in: " ~ x);
@@ -150,10 +184,12 @@ string sql(bool includeObjectSeparators = false, QP...)(Query!(QP) q)
     // add a set of fragments given the prefix and the separator
     void addFragment(SQLFragment!(q.ItemType) item, string prefix, string postfix = null)
     {
+        BitStack bits;
+        bits.push(true);
         if(item.expr)
         {
             put(app, prefix);
-            sqlPut!(includeObjectSeparators, true)(app, item.expr);
+            sqlPut!(includeObjectSeparators, true)(app, item.expr, bits);
             if(postfix.length)
                 put(app, postfix);
         }
@@ -458,6 +494,11 @@ version(Have_mysql_native)
         {
             static if(isInstanceOf!(Nullable, T))
                 alias columnFieldNames = columnFieldNames!(typeof(T.init.get()));
+            else static if(isInstanceOf!(Changed, T))
+            {
+                import std.meta : Repeat;
+                alias columnFieldNames = Repeat!(typeof(T.val).length, "");
+            }
             else
             {
                 import std.meta : Filter;
@@ -516,9 +557,19 @@ version(Have_mysql_native)
                 return T.init;
             }
         }
+        else static if(isInstanceOf!(Changed, T))
+        {
+            // specialized version, we do not process by field names, but by
+            // the tuple stored in the type.
+            T result;
+            static foreach(idx; 0 .. T.val.length)
+            {
+                result.val[idx] = getLeaf!(typeof(result.val[idx]))(r[colIds[idx]]);
+            }
+            return result;
+        }
         else
         {
-            
             T result;
             foreach(idx, n; columnFieldNames!T)
             {
@@ -611,14 +662,19 @@ version(Have_mysql_native)
 
                 bool empty() { return seq.empty; }
 
-                private void loadItem()
+                private void loadItem(bool isfirst)
                 {
                     if(!seq.empty)
                     {
+                        auto oldRow = row;
                         static foreach(i; 0 .. row.length)
                         {
                             row[i] = getItem!(q.RowTypes[i])(seq.front,
                                                               colIds[i][]);
+                            static if(isInstanceOf!(Changed, typeof(row[i])))
+                                // the changed flag needs to be set based on if the previous row is equal to this row
+
+                                row[i]._changed = isfirst || oldRow[i].val != row[i].val;
                         }
                     }
                 }
@@ -626,7 +682,7 @@ version(Have_mysql_native)
                 void popFront()
                 {
                     seq.popFront;
-                    loadItem();
+                    loadItem(false);
                 }
             }
 
@@ -646,6 +702,15 @@ version(Have_mysql_native)
                     assert(colIdx < colNames.length);
                     result.colIds[idx][0] = colIdx;
                     ++colIdx;
+                }
+                else static if(isInstanceOf!(Changed, T))
+                {
+                    // always the same number of columns
+                    foreach(ref cid; result.colIds[idx])
+                    {
+                        assert(colIdx < colNames.length);
+                        cid = colIdx++;
+                    }
                 }
                 else
                 () { // lambda because of the labels
@@ -686,7 +751,7 @@ objSwitch:
                 } ();
             }
 
-            result.loadItem();
+            result.loadItem(true);
             return result;
         }
     }
@@ -849,6 +914,19 @@ objSwitch:
             writeln("author: ", auth, ", book: ", book);
         }
 
+        foreach(newauth, auth, book; conn.fetch(select(ds.changed, ds, ds.books).orderBy(ds.id)))
+        {
+            if(newauth)
+                writeln("Author: ", auth);
+            writeln("    book: ", book);
+        }
+
+        foreach(newauth, auth, book; conn.fetch(select(ds.id.changed, ds, ds.books).orderBy(ds.id)))
+        {
+            if(newauth)
+                writeln("Author: ", auth);
+            writeln("    book: ", book);
+        }
         auto book4 = conn.create(book("Remove Me", steve.id));
         writeln(book4);
         assert(conn.erase(book4) == 1);

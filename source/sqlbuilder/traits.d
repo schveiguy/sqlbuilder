@@ -15,7 +15,8 @@ private struct SingleTableDef
 // get any dependent tables for an item, even if the item doesn't have any
 package auto ref getTables(T)(auto ref T item)
 {
-    static if(is(typeof({ return item.tables;}()) R) && isInputRange!R && is(ElementType!R == TableDef))
+    import std.range.primitives;
+    static if(is(typeof({ return item.tables;}()) R) && isInputRange!R && is(ElementType!R : const TableDef))
     {
         return item.tables;
     }
@@ -284,6 +285,20 @@ template primaryKeyFields(T)
 }
 
 enum hasPrimaryKey(T) = primaryKeyFields!T.length > 0;
+
+template PrimaryKeyTypes(T)
+{
+    import std.meta : AliasSeq;
+    template PKHelper(Fields...)
+    {
+        static if(Fields.length == 0)
+            alias PKHelper = AliasSeq!();
+        else
+            alias PKHelper = AliasSeq!(typeof(__traits(getMember, T, Fields[0])), PKHelper!(Fields[1 .. $]));
+    }
+
+    alias PrimaryKeyTypes = PKHelper!(primaryKeyFields!T);
+}
 
 template possibleNullColumn(alias sym)
 {

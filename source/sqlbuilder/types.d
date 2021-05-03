@@ -11,19 +11,29 @@ enum Spec : char
     innerJoin = 'I',
     rightJoin = 'R',
     outerJoin = 'O',
-    objend = 'o', // denotes the end of an object
-    // separator between clauses. Encoded as a spec to allow for optional
-    // parentheses
-    and = 'a',
+    objend = 'e', // denotes the end of an object
+    // separator between clauses.
+    separator = ';',
+
+    // clause starts and ends. Using these can allow for nested ands or ors
+    beginAnd = '&',
+    beginOr = '|',
+    endGroup = '$',
 }
 
 enum joinSpec = "\\" ~ Spec.leftJoin;
 
 enum paramSpec = "\\" ~ Spec.param;
 
-enum andSpec = "\\" ~ Spec.and;
-
 enum objEndSpec = "\\" ~ Spec.objend;
+
+enum andSpec = "\\" ~ Spec.beginAnd;
+
+enum orSpec = "\\" ~ Spec.beginOr;
+
+enum sepSpec = "\\" ~ Spec.separator;
+
+enum endGroupSpec = "\\" ~ Spec.endGroup;
 
 Spec getSpec(const(char)[] s)
 {
@@ -140,6 +150,17 @@ struct ExprString
     }
 }
 
+void addSep(ref ExprString expr)
+{
+    if(expr)
+    {
+        auto lastSpec = expr.data[$-1].getSpec;
+
+        if(lastSpec != Spec.beginAnd && lastSpec != Spec.beginOr)
+            expr ~= sepSpec;
+    }
+}
+
 string makeSpec(string value, Spec spec)
 {
     return "\\" ~ spec ~ value;
@@ -184,14 +205,20 @@ struct SQLFragment(Item)
         Item[] params;
 }
 
-
 struct Joins(Item)
 {
     SQLFragment!Item joinFragment;
     alias joinFragment this;
-    // track which tables have been added to the join list.
-    // TODO: figure out how to do this without an AA.
-    bool[string] tables;
+
+    bool hasJoin(const TableDef def)
+    {
+        // linear search. It's backwards because we only search for
+        // dependencies if the leaf is not present. And leaves go on the
+        // end.
+        import std.algorithm : canFind;
+        import std.range : retro;
+        return joinFragment.expr.data.retro.canFind(def.joinExpr.data.retro);
+    }
 }
 
 // a query is a dynamic structure designed to contain all the things needed to
@@ -215,11 +242,11 @@ struct Query(Item, RowT...)
     package alias ItemType = Item;
 
     // allow forgetting all the row types.
-    static if(RowT.length > 1 || (RowT.length == 1 && !is(RowT[0] == void)))
+    static if(RowT.length == 0 || RowT.length > 1 || (RowT.length == 1 && !is(RowT[0] == void)))
     {
-        .Query!Item basicQuery() return @trusted
+        ref .Query!(Item, void) basicQuery() return @trusted
         {
-            return *cast(.Query!Item*)&this;
+            return *cast(.Query!(Item, void)*)&this;
         }
 
         alias basicQuery this;
@@ -288,6 +315,22 @@ struct ColumnDef(T)
     const TableDef table;
     ExprString expr;
     alias type = T;
+}
+
+struct ConcatDef
+{
+    const(TableDef)[] tables;
+    ExprString expr;
+    alias type = string;
+}
+
+// a change struct
+struct Changed(ColTypes...)
+{
+    ColTypes val;
+    package bool _changed;
+
+    bool opCast(T : bool)() { return _changed; }
 }
 
 // basic expression for strings. Used to provide literal SQL to ExprString.

@@ -96,20 +96,27 @@ struct Parameter(T, bool hasValidation = false)
 
 package void addJoin(Item)(ref Joins!Item join, const TableDef def)
 {
-    if(def.as in join.tables)
+    if(join.hasJoin(def))
         // already added
         return;
 
     // short circuit any cycles
-    join.tables[def.as] = true;
+    // TODO: see how we can possibly do this
+    //join.tables[def.as] = true;
 
-    foreach(d; def.dependencies)
+    if(def.dependencies.length == 0)
+    {
+        // this is the primary table. Only add it if there are no other joins
+        if(join.expr.data.length != 0)
+            throw new Exception("Multiple primary tables not allowed");
+    }
+    else foreach(d; def.dependencies)
         join.addJoin(d);
 
     join.expr ~= def.joinExpr;
 }
 
-package void updateQuery(string field, bool allowDatasets, Q, Expr...)(ref Q query, Expr expressions) if (isQuery!Q)
+package void updateQueryField(bool allowDatasets, Item, Expr...)(ref SQLFragment!Item field, ref Joins!Item joins, Expr expressions)
 {
     foreach(exp; expressions)
     {
@@ -121,18 +128,18 @@ package void updateQuery(string field, bool allowDatasets, Q, Expr...)(ref Q que
             alias e = exp;
         // add each table dependency to the query
         foreach(tbl; getTables(e))
-            query.joins.addJoin(tbl);
-        if(__traits(getMember, query, field).expr)
-            __traits(getMember, query, field).expr ~= ", ";
-        __traits(getMember, query, field).expr ~= e.expr;
+            joins.addJoin(tbl);
+        if(field.expr)
+            field.expr ~= ", ";
+        field.expr ~= e.expr;
         static if(!is(getParamType!(typeof(e)) == void))
-            __traits(getMember, query, field).params.append(e.params);
+            field.params.append(e.params);
     }
 }
 
 auto select(Q, Cols...)(Q query, Cols columns) if (isQuery!Q)
 {
-    query.updateQuery!("fields", true)(columns);
+    updateQueryField!true(query.fields, query.joins, columns);
     // adjust the query type list according to the columns.
     alias typeList = getQueryTypeList!(Q, Cols);
     static if(!is(typeList == Q.RowTypes))
@@ -144,15 +151,35 @@ auto select(Q, Cols...)(Q query, Cols columns) if (isQuery!Q)
         return query;
 }
 
+auto changed(T)(ColumnDef!T col)
+{
+    // create a column def based on the given column
+    return ColumnDef!(Changed!T)(col.table, col.expr);
+}
+
+auto changed(DS)(DS ds) if (isDataSet!DS && hasPrimaryKey!(DS.RowType))
+{
+    // create a column change def based on the dataset's primary keys
+    ExprString expr;
+    foreach(i, f; primaryKeyFields!(DS.RowType))
+    {
+        static if(i > 0)
+            expr ~= ", ";
+        expr ~= ds.tableDef.as.makeSpec(Spec.tableid);
+        expr ~= getColumnName!(__traits(getMember, DS.RowType, f));
+    }
+    return ColumnDef!(Changed!(PrimaryKeyTypes!(DS.RowType)))(ds.tableDef, expr);
+}
+
 Q orderBy(Q, Expr...)(Q query, Expr expressions) if (isQuery!Q)
 {
-    query.updateQuery!("orders", false)(expressions);
+    updateQueryField!false(query.orders, query.joins, expressions);
     return query;
 }
 
 Q groupBy(Q, Cols...)(Q query, Cols cols) if (isQuery!Q)
 {
-    query.updateQuery!("groups", false)(cols);
+    updateQueryField!false(query.groups, query.joins, cols);
     return query;
 }
 
@@ -163,35 +190,43 @@ Q limit(Q)(Q query, size_t numItems, size_t offset = 0) if (isQuery!Q)
     return query;
 }
 
-auto where(Q, Spec...)(Q query, Spec spec) if (isQuery!Q || is(Q : Update!T, T) || is(Q : Delete!T, T))
+enum ConditionalJoiner
 {
-    import std.array: Appender;
-    import std.range : put;
-    import std.traits : isSomeString, isInstanceOf;
+    none,
+    and,
+    or,
+}
 
+void updateConditions(Item, Spec...)(ref SQLFragment!Item conditions, ref Joins!Item joins, Spec spec) if (Spec.length > 0)
+{
     // static
     foreach(s; spec)
         static if(is(typeof(s.valid)))
             if(!s.valid)
-                return query;
+                return;
 
-    if(query.conditions.expr)
-        query.conditions.expr ~= andSpec;
+    static if(is(Spec[0] == string))
+    {
+        if(spec[0] != endGroupSpec)
+            conditions.expr.addSep;
+    }
+    else
+        conditions.expr.addSep;
     // static 
     foreach(i, s; spec)
     {
         static if(is(typeof(s) : const(char)[]))
         {
-            query.conditions.expr ~= s;
+            conditions.expr ~= s;
         }
         else static if(is(typeof((() => s.expr)()) : const(char)[]) ||
                        is(typeof((() => s.expr)()) : const(ExprString)))
         {
-            query.conditions.expr ~= s.expr;
+            conditions.expr ~= s.expr;
             foreach(tab; getTables(s))
-                query.joins.addJoin(tab);
+                joins.addJoin(tab);
             static if(!is(getParamType!(typeof(s)) == void))
-                query.conditions.params.append(s.params);
+                conditions.params.append(s.params);
         }
         else
         {
@@ -199,18 +234,57 @@ auto where(Q, Spec...)(Q query, Spec spec) if (isQuery!Q || is(Q : Update!T, T) 
             static assert(false, "Unsupported type for where clause: " ~ typeof(s).stringof ~ " (arg " ~ pnum.stringof ~ "), maybe try wrapping with `sqlbuilder.dialect.common.param`");
         }
     }
+}
 
+Q where(Q, Spec...)(Q query, Spec spec) if ((isQuery!Q || is(Q : Update!T, T) || is(Q : Delete!T, T)) && Spec.length > 0)
+{
+    updateConditions(query.conditions, query.joins, spec);
     return query;
+}
+
+ColumnDef!T exprCol(T, Args...)(Args args)
+{
+    // first, find all columns, and ensure that table defs are all from the
+    // same table (a ColumnDef cannot have multiple tables).
+    const(TableDef)* tabledef;
+    foreach(ref arg; args)
+    {
+        static if(is(typeof(arg) == ColumnDef!U, U))
+        {
+            if(tabledef && arg.table != *tabledef)
+                throw new Exception("can't have multiple tabledefs in the expression");
+            else
+                tabledef = &arg.table;
+        }
+    }
+
+    assert(tabledef !is null);
+
+    // build the expr string
+    ExprString expr;
+    foreach(ref a; args)
+    {
+        static if(is(typeof(a) == string))
+            expr ~= a;
+        else
+            expr ~= a.expr;
+    }
+    return ColumnDef!(T)(*tabledef, expr);
 }
 
 ColumnDef!T as(T)(ColumnDef!T col, string newName)
 {
-    return ColumnDef!T(col.table, col.expr ~ " AS " ~ newName.makeSpec(Spec.id));
+    return exprCol!T(col, " AS ", newName.makeSpec(Spec.id));
+}
+
+ConcatDef as(ConcatDef col, string newName)
+{
+    return ConcatDef(col.tables, col.expr ~ " AS " ~ newName.makeSpec(Spec.id));
 }
 
 ColumnDef!long count(T)(ColumnDef!T col)
 {
-    return ColumnDef!long(col.table, ExprString("COUNT(" ~ col.expr.data ~ ")"));
+    return exprCol!long("COUNT(", col, ")");
 }
 
 ColumnDef!T ascend(T)(ColumnDef!T col)
@@ -221,6 +295,27 @@ ColumnDef!T ascend(T)(ColumnDef!T col)
 ColumnDef!T descend(T)(ColumnDef!T col)
 {
     return ColumnDef!T(col.table, col.expr ~ " DESC");
+}
+
+ConcatDef concat(Args...)(Args args) if (Args.length > 1)
+{
+    // build an ExprString based on the args, concatenating all the tables
+    // referenced.
+    ConcatDef result;
+    result.expr ~= "CONCAT(";
+    foreach(i, arg; args)
+    {
+        foreach(tbl; arg.getTables)
+            result.tables ~= tbl;
+        static if(i != 0)
+            result.expr ~= ", ";
+        static if(is(typeof(arg) == string))
+            result.expr ~= arg;
+        else
+            result.expr ~= arg.expr;
+    }
+    result.expr ~= ")";
+    return result;
 }
 
 // template to implement all functions that require a specific parameter type.
@@ -338,7 +433,7 @@ template SQLImpl(Item, alias param)
             {
                 static if(hasUDA!(__traits(getMember, T, fname), primaryKey))
                 {
-                    result = result.where(__traits(getMember, ds, fname), " = ",
+                    updateConditions(result.conditions, result.joins, __traits(getMember, ds, fname), " = ",
                                           param(__traits(getMember, item, fname)));
                 }
                 else
@@ -379,8 +474,8 @@ template SQLImpl(Item, alias param)
     {
         foreach(i, f; primaryKeyFields!(t.RowType))
         {
-            query = query.where(__traits(getMember, t, f), " = ", 
-                                param(__traits(getMember, model, f)));
+            updateConditions(query.conditions, query.joins,
+                 __traits(getMember, t, f), " = ", param(__traits(getMember, model, f)));
         }
         return query;
     }
@@ -414,8 +509,8 @@ template SQLImpl(Item, alias param)
     {
         foreach(i, f; primaryKeyFields!(t.RowType))
         {
-            query = query.where(__traits(getMember, t, f), " = ", 
-                                param(args[i]));
+            updateConditions(query.conditions, query.joins,
+                 __traits(getMember, t, f), " = ", param(args[i]));
         }
         return query;
     }

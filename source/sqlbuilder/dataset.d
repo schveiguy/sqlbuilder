@@ -17,11 +17,13 @@ TableDef buildTableDef(T, alias relation, mappings...)(Spec joinType, TableDef d
         return getColumnName!(__traits(getMember, T, fieldname)).makeSpec(Spec.id);
     }
 
+    if(mappings.length > 1)
+        expr ~= andSpec;
     // static
     foreach(i, m; mappings)
     {
         static if(i != 0)
-            expr ~= " AND ";
+            expr ~= sepSpec;
         static if(isKeyLiteral(m.foreign_key))
         {
             // the foreign key is a value, which means we need to put it into
@@ -42,6 +44,8 @@ TableDef buildTableDef(T, alias relation, mappings...)(Spec joinType, TableDef d
             expr ~= ExprString(tableid, genKeyId!(relation.foreign_table, m.foreign_key), " = ", deptable, genKeyId!(T, m.key));
     }
 
+    if(mappings.length > 1)
+        expr ~= endGroupSpec;
     expr ~= ")";
 
     return TableDef(tableid[2 .. $], expr, [dependency]);
@@ -108,8 +112,13 @@ struct DataSet(T, alias core)
             alias X = Nullable!(typeof(__traits(getMember, T, item)));
         else
             alias X = typeof(__traits(getMember, T, item));
-        static col = makeColumnDef!(X) (core, core.as,
+
+        static auto result() {
+            return makeColumnDef!(X) (core, core.as,
                         getColumnName!(__traits(getMember, T, item)));
+        }
+        if(__ctfe) return result();
+        static col = result();
         return col;
     }
 
@@ -136,8 +145,12 @@ struct DataSet(T, alias core)
             alias X = Nullable!T;
         else
             alias X = T;
-        static col = ColumnDef!X(core, ExprString(core.as.makeSpec(Spec.id), ".*",
+        static auto result() {
+            return ColumnDef!X(core, ExprString(core.as.makeSpec(Spec.id), ".*",
                                                   objEndSpec));
+        }
+        if(__ctfe) return result();
+        static col = result();
         return col;
     }
 }
@@ -207,7 +220,7 @@ version(unittest)
 
         // relations
         static @mapping("author_id") @refersTo!book Relation books;
-        static @mapping("author_id") @mapping("book_type", " = 0") @refersTo!book Relation referenceBooks;
+        static @mapping("author_id") @mapping("book_type", "= 0") @refersTo!book Relation referenceBooks;
     }
 
     enum BookType {
@@ -229,6 +242,8 @@ version(unittest)
     }
 }
 
+version(unittest)
+    import sqlbuilder.testing;
 unittest
 {
     import sqlbuilder.dialect.mysql;
