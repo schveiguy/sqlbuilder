@@ -52,6 +52,11 @@ bool isJoin(Spec s)
         s == Spec.outerJoin;
 }
 
+bool isGroup(Spec s)
+{
+    return s == Spec.beginOr || s == Spec.beginAnd;
+}
+
 package bool isKeyLiteral(string val)
 {
     // returns true if any character inside val cannot be an identifier
@@ -148,6 +153,206 @@ struct ExprString
         }
         put(outputRange, "}");
     }
+
+    // This function sanitizes and optimizes the expression string based on the
+    // grouping tokens. This will eliminate empty groupings (and the separators
+    // surrounding it), and also remove extraneous groupings.
+    //
+    // If the term "NOT" (in any captialization/spacing) is detected before the
+    // grouping, it is considered part of the grouping, and also removed.
+    //
+    // This function rewrites the expression array, which means that you should
+    // only use this function when you know there is only one reference to this
+    // expression string.
+    //
+    // it returns `this` at the end for easier pipelining.
+    //
+    // TODO: constant fold TRUE or FALSE into either removing the rest of the
+    // clause or removing the TRUE/FALSE. e.g.:
+    // A AND TRUE => A
+    // A AND FALSE => FALSE
+    // A OR TRUE => TRUE
+    // A OR FALSE => B
+    ref ExprString sanitize() scope
+    {
+        import std.exception : enforce;
+        static struct Result
+        {
+            size_t nTerms;
+            size_t endidx;
+        }
+
+        static bool isNot(string s)
+        {
+            import std.string : strip, toUpper;
+            import std.algorithm : equal;
+            return equal(s.strip.toUpper, "NOT");
+        }
+        Result recurse(size_t eidx)
+        {
+            Spec myGroup = eidx == 0 ? Spec.none : getSpec(data[eidx - 1]);
+            size_t nTerms = 0;
+            bool expectTerm = true;
+            Result singleGroup;
+            size_t termStart = eidx; // to check for replacing our group with the subgroup.
+loop:
+            while(eidx < data.length)
+            {
+                auto s = getSpec(data[eidx]);
+                with(Spec) switch(s)
+                {
+                case beginAnd:
+                case beginOr:
+                    {
+                        if(expectTerm)
+                            ++nTerms;
+                        expectTerm = false;
+
+                        auto subresult = recurse(eidx + 1);
+                        if(subresult.nTerms == 0)
+                        {
+                            // remove all the terms from the blank item
+                            data[eidx .. subresult.endidx + 1] = null;
+                            // check if the prior item is a not
+                            if(eidx > 0 && isNot(data[eidx - 1]))
+                            {
+                                // remove the preceeding NOT
+                                data[--eidx] = "";
+                            }
+
+                            // see if we need to remove a separator
+                            if(subresult.endidx + 1 < data.length && data[subresult.endidx + 1] == sepSpec)
+                            {
+                                data[subresult.endidx + 1] = "";
+                                eidx = subresult.endidx + 1;
+                            }
+                            else
+                            {
+                                if(eidx > 0 && data[eidx - 1] == sepSpec)
+                                    // remove the preceeding separator
+                                    data[eidx - 1] = "";
+                                eidx = subresult.endidx + 1;
+                            }
+                            --nTerms;
+                            expectTerm = true;
+                        }
+                        else
+                        {
+                            // if the subgroup's terms are only 1 in length,
+                            // there are no separators, and it's just one term.
+                            if(subresult.nTerms == 1)
+                            {
+                                data[eidx] = "";
+                                data[subresult.endidx] = "";
+                            }
+                            else if(getSpec(data[eidx]) == myGroup)
+                            {
+                                // this subgroup is the same type as the
+                                // current group.
+                                //
+                                // make sure the previous item is not some
+                                // arbitrary string (such as "NOT"), and then
+                                // we can absorb the subgroup into our group.
+
+                                // we only get here if myGroup is not Spec.none.
+                                assert(eidx > 0);
+
+                                if(getSpec(data[eidx - 1]) != none)
+                                {
+                                    data[eidx] = "";
+                                    data[subresult.endidx] = "";
+                                    nTerms += subresult.nTerms - 1;
+                                }
+                            }
+                            if(data[eidx].length)
+                            {
+                                singleGroup = subresult;
+                            }
+                            eidx = subresult.endidx + 1;
+                        }
+                    }
+                    break;
+                case separator:
+                    // another term is coming
+                    enforce(!expectTerm, "Term expected, but got separator instead");
+                    expectTerm = true;
+                    ++eidx;
+                    break;
+                case endGroup:
+                    // end of the group
+                    break loop;
+                default: // everything else comprises a `term`
+                    if(expectTerm && data[eidx].length) // not removed
+                    {
+                        // this is a term
+                        ++nTerms;
+                        expectTerm = false;
+                    }
+                    ++eidx;
+                    break;
+                }
+            }
+
+            enforce(myGroup == Spec.none || eidx < data.length, "Invalid construction of groupings, end of data found");
+
+            if(myGroup != Spec.none && nTerms == 1)
+            {
+                // find the first non-removed term. If it's a group, then we
+                // hoist that group out to our group's info.
+                assert(termStart != 0);
+                foreach(i; termStart .. eidx)
+                {
+                    if(data[i].length)
+                    {
+                        auto s = getSpec(data[i]);
+                        if(s == Spec.beginAnd || s == Spec.beginOr)
+                        {
+                            assert(singleGroup.endidx != 0);
+                            assert(singleGroup.nTerms != 0);
+                            // replace our group with this group
+                            data[termStart - 1] = data[i];
+                            data[i] = "";
+                            data[singleGroup.endidx] = "";
+                            nTerms = singleGroup.nTerms;
+                        }
+                        break;
+                    }
+                }
+            }
+            return Result(nTerms, eidx);
+        }
+
+        recurse(0);
+
+        // remove all empty strings
+        import std.algorithm : remove;
+        data = data.remove!(s => s.length == 0);
+        data.assumeSafeAppend;
+        return this;
+    }
+}
+
+unittest
+{
+    import std.stdio;
+    static string idOf(string s)
+    {
+        return s.makeSpec(Spec.id);
+    }
+    assert(ExprString(andSpec, idOf("x"), " = 5", sepSpec, idOf("y"), " = 6", sepSpec, " NOT ", orSpec, andSpec, endGroupSpec, endGroupSpec, endGroupSpec).sanitize ==
+           ExprString(andSpec, idOf("x"), " = 5", sepSpec, idOf("y"), " = 6", endGroupSpec));
+    assert(ExprString(andSpec, idOf("x"), " = 5", endGroupSpec).sanitize ==
+           ExprString(idOf("x"), " = 5"));
+    assert(ExprString(andSpec, idOf("x"), " = 5", sepSpec, orSpec, idOf("y"), " = 6", endGroupSpec, endGroupSpec).sanitize ==
+           ExprString(andSpec, idOf("x"), " = 5", sepSpec, idOf("y"), " = 6", endGroupSpec));
+    assert(ExprString(andSpec, idOf("x"), " = 5", sepSpec, " NOT ", orSpec, idOf("y"), " = 6", endGroupSpec, endGroupSpec).sanitize ==
+           ExprString(andSpec, idOf("x"), " = 5", sepSpec, " NOT ", idOf("y"), " = 6", endGroupSpec));
+    assert(ExprString(andSpec, idOf("x"), " = 5", sepSpec, andSpec, idOf("y"), " = 6", sepSpec, idOf("z"), " = 7", endGroupSpec, endGroupSpec).sanitize ==
+           ExprString(andSpec, idOf("x"), " = 5", sepSpec, idOf("y"), " = 6", sepSpec, idOf("z"), " = 7", endGroupSpec));
+    assert(ExprString(andSpec, idOf("x"), " = 5", sepSpec, orSpec, andSpec, idOf("y"), " = 6", sepSpec, idOf("z"), " = 7", endGroupSpec, endGroupSpec, endGroupSpec).sanitize ==
+           ExprString(andSpec, idOf("x"), " = 5", sepSpec, idOf("y"), " = 6", sepSpec, idOf("z"), " = 7", endGroupSpec));
+    assert(ExprString(andSpec, idOf("x"), " = 5", sepSpec, orSpec, andSpec, endGroupSpec, sepSpec, andSpec, idOf("y"), " = 6", sepSpec, idOf("z"), " = 7", endGroupSpec, endGroupSpec, endGroupSpec).sanitize ==
+           ExprString(andSpec, idOf("x"), " = 5", sepSpec, idOf("y"), " = 6", sepSpec, idOf("z"), " = 7", endGroupSpec));
 }
 
 void addSep(ref ExprString expr)

@@ -231,7 +231,7 @@ void updateConditions(Item, Spec...)(ref SQLFragment!Item conditions, ref Joins!
         else
         {
             enum int pnum = i + 1;
-            static assert(false, "Unsupported type for where clause: " ~ typeof(s).stringof ~ " (arg " ~ pnum.stringof ~ "), maybe try wrapping with `sqlbuilder.dialect.common.param`");
+            static assert(false, "Unsupported type for where clause: " ~ typeof(s).stringof ~ " (arg " ~ pnum.stringof ~ "), maybe try wrapping with `param`");
         }
     }
 }

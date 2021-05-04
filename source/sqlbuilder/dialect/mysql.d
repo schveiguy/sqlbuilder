@@ -65,6 +65,9 @@ alias _impl = SQLImpl!(Variant, param);
 static foreach(f; __traits(allMembers, _impl))
     mixin("alias " ~ f ~ " = _impl." ~ f ~ ";");
 
+// define a query that has no types being returned.
+alias UntypedQuery = typeof(select());
+
 private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, App)(ref App app, ExprString expr)
 {
     BitStack andor;
