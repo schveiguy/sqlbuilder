@@ -498,7 +498,7 @@ ref Q simplifyConditions(Q)(return ref Q query) if (isQuery!Q || is(Q : Update!T
             TermInfo result;
             result.bidx = eidx == 0 ? eidx : eidx - 1;
 loop:
-            while(eidx < data.length)
+            while(true)
             {
                 auto item = nextTerm(eidx);
                 ++result.subterms;
@@ -618,7 +618,6 @@ loop:
         data = data.dup;
     auto s = Simplifier(data);
     auto result = s.processSubgroup(Spec.beginAnd, 0);
-
 
     static if(hasParams)
     {
@@ -829,6 +828,17 @@ unittest
             .where(" FALSE ");
         assert(query.simplifyConditions.conditions.expr ==
                ExprString(" FALSE "));
+    }
+
+    // test issue with removing front of global orSpec data.
+    {
+        auto query = uq.select(ds)
+            .where(orSpec, orSpec, ds.x, " = 5")
+            .where(ds.x, " = 6", endGroupSpec)
+            .where(orSpec, " FALSE ", endGroupSpec, endGroupSpec);
+
+        assert(query.simplifyConditions.conditions.expr ==
+               mkexpr(orSpec, ds.x, " = 5", sepSpec, ds.x, " = 6", endGroupSpec));
     }
 
     // test removing some parameters
