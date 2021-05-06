@@ -212,7 +212,7 @@ void updateConditions(Item, Spec...)(ref SQLFragment!Item conditions, ref Joins!
     }
     else
         conditions.expr.addSep;
-    // static 
+    // static
     foreach(i, s; spec)
     {
         static if(is(typeof(s) : const(char)[]))
@@ -240,6 +240,619 @@ Q where(Q, Spec...)(Q query, Spec spec) if ((isQuery!Q || is(Q : Update!T, T) ||
 {
     updateConditions(query.conditions, query.joins, spec);
     return query;
+}
+// This function simplifies the conditional expression string based on the
+// grouping tokens. This will eliminate empty groupings (and the separators
+// surrounding it), and also remove extraneous groupings.
+//
+// If the term "NOT" (in any captialization/spacing) is detected before the
+// grouping, it is considered part of the grouping, and also removed.
+//
+// It also uses boolean logic to remove extraneous conditions (like FALSE AND
+// someCondition will remove someCondition). It will NOT remove joins that are
+// no longer needed, due to the condition being removed, so you still must deal
+// with possible group by clauses.
+//
+// This function rewrites the expression array and possibly the parameter
+// array, which means that you should only use this function when you know
+// there is only one reference to this data.
+//
+// it accepts the aggregate by reference, and returns a reference to it at the
+// end.
+//
+ref Q simplifyConditions(Q)(return ref Q query) if (isQuery!Q || is(Q : Update!T, T) || is(Q : Delete!T, T))
+{
+    import std.exception : enforce;
+
+    enum hasParams = is(typeof(query.conditions.params));
+
+    enum TermType
+    {
+        not,
+        group,
+        bTrue,
+        bFalse,
+        endGroup,
+        endData,
+        other
+    }
+
+    static struct TermInfo
+    {
+        size_t bidx;
+        size_t eidx;
+        size_t subterms;
+        bool hasNot;
+        TermType type;
+    }
+
+    static struct Simplifier
+    {
+        string[] data;
+        static TermType parseTerm(string s)
+        {
+            import std.string : strip, toUpper;
+            import std.algorithm : equal;
+            s = s.strip;
+            if(s.length)
+            {
+                switch(s[0])
+                {
+                case 'T': case 't':
+                    if(s.length == 4 && equal(s[1 .. $].toUpper, "RUE"))
+                        return TermType.bTrue;
+                    break;
+                case 'F': case 'f':
+                    if(s.length == 5 && equal(s[1 .. $].toUpper, "ALSE"))
+                        return TermType.bFalse;
+                    break;
+                case 'N': case 'n':
+                    if(s.length == 3 && equal(s[1 .. $].toUpper, "OT"))
+                        return TermType.not;
+                    break;
+                default:
+                    break;
+                }
+            }
+            return TermType.other;
+        }
+
+        size_t nextSignificant(size_t eidx)
+        {
+            while(eidx < data.length)
+            {
+                with(Spec) switch(getSpec(data[eidx]))
+                {
+                case separator:
+                    break;
+                case none:
+                    if(data[eidx].length == 0)
+                        break;
+                    return eidx;
+                    static if(hasParams)
+                    {
+                    case param:
+                        if(data[eidx].length == 2) // skip removed params
+                            return eidx;
+                        break;
+                    }
+                default:
+                    return eidx;
+                }
+                ++eidx;
+            }
+            return eidx;
+        }
+
+        size_t nextSeparator(size_t eidx)
+        {
+            while(eidx < data.length)
+            {
+                with(Spec) switch(getSpec(data[eidx]))
+                {
+                case endGroup:
+                case separator:
+                    return eidx;
+                default:
+                    break;
+                }
+                ++eidx;
+            }
+            return eidx;
+        }
+
+        // skip to the end of the gorup. This is ONLY valid for sub groups,
+        // not the outer group.
+        size_t skipToGroupEnd(size_t idx)
+        {
+            size_t nesting = 1;
+            while(++idx < data.length)
+            {
+                with(Spec) switch(getSpec(data[idx]))
+                {
+                case beginAnd:
+                case beginOr:
+                    ++nesting;
+                    break;
+                case endGroup:
+                    if(--nesting == 0)
+                        return idx;
+                    break;
+                default:
+                    break;
+                }
+            }
+            if(nesting != 1)
+                throw new Exception("Invalid group construction");
+            return data.length - 1;
+        }
+
+        enum removedParam = paramSpec ~ "X";
+
+        void clearData(size_t bidx, size_t eidx)
+        {
+            static if(hasParams)
+            {
+                foreach(ref d; data[bidx .. eidx])
+                {
+                    if(d == paramSpec)
+                        d = removedParam;
+                    else
+                        d = null;
+                }
+            }
+            else
+            {
+                data[bidx .. eidx] = null;
+            }
+        }
+
+        TermInfo nextTerm(size_t eidx)
+        {
+            // skip all blanks and separators
+            TermInfo result;
+            result.bidx = eidx = nextSignificant(eidx);
+            if(result.bidx == data.length)
+            {
+                result.eidx = result.bidx;
+                result.type = TermType.endData;
+                return result;
+            }
+            auto sp = getSpec(data[eidx]);
+            with(Spec) switch(sp)
+            {
+            case beginAnd:
+            case beginOr:
+                result = processSubgroup(sp, eidx + 1);
+                if(result.type == TermType.group && result.subterms == 0)
+                {
+                    // empty group, remove it completely
+                    clearData(result.bidx, result.eidx + 1);
+                    // recurse, just find the next term.
+                    return nextTerm(result.eidx + 1);
+                }
+                return result;
+            case endGroup:
+                result.type = TermType.endGroup;
+                result.eidx = eidx;
+                return result;
+            default:
+                // check for specialized cases
+                {
+
+                    auto termType = parseTerm(data[result.bidx]);
+                    if(termType == TermType.not)
+                    {
+                        TermInfo modified = nextTerm(result.bidx + 1);
+                        if(modified.hasNot)
+                        {
+                            // not not turns into just the thing. The inner
+                            // not is located at the first index. Cancel
+                            // both of them.
+                            data[modified.bidx] = "";
+                            data[result.bidx] = "";
+                            result.bidx = nextSignificant(modified.bidx + 1);
+                        }
+                        else if(modified.type == TermType.bFalse)
+                        {
+                            // "NOT FALSE" is really just "TRUE"
+                            modified.type = TermType.bTrue;
+                            data[result.bidx] = " TRUE ";
+                            data[modified.bidx] = "";
+                        }
+                        else if(modified.type == TermType.bTrue)
+                        {
+                            // "NOT TRUE" is really just "FALSE"
+                            modified.type = TermType.bFalse;
+                            data[result.bidx] = " FALSE ";
+                            data[modified.bidx] = "";
+                        }
+                        else if(modified.type == TermType.endGroup ||
+                                modified.type == TermType.endData)
+                        {
+                            // this is a stray not, remove it.
+                            data[result.bidx] = "";
+                            return modified;
+                        }
+                        else
+                        {
+                            // apply the 'not' to it.
+                            result.hasNot = true;
+                        }
+                        result.eidx = modified.eidx;
+                        result.type = modified.type;
+                        return result;
+                    }
+
+                    // find the next punctuation item
+                    result.eidx = nextSeparator(result.bidx) - 1;
+                    result.type = termType;
+                    return result;
+                }
+            }
+        }
+
+        TermInfo processSubgroup(Spec myGroup, size_t eidx)
+        {
+            TermInfo firstItem;
+            TermInfo result;
+            result.bidx = eidx == 0 ? eidx : eidx - 1;
+loop:
+            while(eidx < data.length)
+            {
+                auto item = nextTerm(eidx);
+                ++result.subterms;
+                if(firstItem.type == TermType.not)
+                {
+                    firstItem = item;
+                }
+
+                with(TermType) final switch(item.type)
+                {
+                case group:
+                    // this is a subgroup term. If it's type matches our
+                    // type (and no not is applied), then we can just
+                    // remove it's walls, and include it in our terms.
+                    if(!item.hasNot && getSpec(data[item.bidx]) == myGroup)
+                    {
+                        data[item.bidx] = "";
+                        data[item.eidx] = "";
+                        result.subterms += item.subterms - 1;
+                    }
+                    break;
+                case bTrue:
+                    if(myGroup == Spec.beginAnd)
+                    {
+                        // eliminate if not the first term
+                        if(result.subterms > 1)
+                        {
+                            data[item.bidx] = "";
+                            --result.subterms;
+                        }
+                    }
+                    else if(myGroup == Spec.beginOr)
+                    {
+                        // this entire group reduces down to just TRUE.
+                        result.eidx = skipToGroupEnd(item.eidx);
+                        data[result.bidx] = data[item.bidx];
+                        clearData(result.bidx + 1, result.eidx + 1);
+                        result.type = item.type;
+                        result.subterms = 0;
+                        return result;
+                    }
+                    break;
+                case bFalse:
+                    if(myGroup == Spec.beginOr)
+                    {
+                        // eliminate if not the first term
+                        if(result.subterms > 1)
+                        {
+                            data[item.bidx] = "";
+                            --result.subterms;
+                        }
+                    }
+                    else if(myGroup == Spec.beginAnd)
+                    {
+                        // this entire group reduces down to just TRUE.
+                        result.eidx = skipToGroupEnd(item.eidx);
+                        data[result.bidx] = data[item.bidx];
+                        clearData(result.bidx + 1, result.eidx + 1);
+                        result.type = item.type;
+                        result.subterms = 0;
+                        return result;
+                    }
+                    break;
+                case other:
+                    // no special treatment, just another term.
+                    break;
+                case endData:
+                    if(result.bidx != 0)
+                        throw new Exception("Invalid group structure, reached end of data");
+                    goto case;
+                case endGroup:
+                    --result.subterms;
+                    result.eidx = item.eidx;
+                    break loop;
+                case not:
+                    assert(0); // should never get here
+                }
+                // remove the first item if it's extraneous (true in an and
+                // group, or false in an or group)
+                if(result.subterms > 1 &&
+                   ((myGroup == Spec.beginAnd && firstItem.type == TermType.bTrue) ||
+                    (myGroup == Spec.beginOr && firstItem.type == TermType.bFalse)))
+                {
+                    data[firstItem.bidx] = "";
+                    firstItem = item;
+                    --result.subterms;
+                }
+
+                // go to next term.
+                eidx = item.eidx + 1;
+            }
+
+            // check to see if this is a single item group. If so, we can
+            // eliminate the group, and return the information for the
+            // first item.
+            if(result.subterms == 1)
+            {
+                // do not blank out anything that the first item considers part
+                // of it. This can happen for the outer group (that has no
+                // beginAnd)
+                if(result.bidx != firstItem.bidx)
+                    data[result.bidx] = "";
+                if(result.eidx < data.length && result.eidx != firstItem.eidx)
+                    data[result.eidx] = "";
+                return firstItem;
+            }
+
+            // it must be a group at this point.
+            result.type = TermType.group;
+            return result;
+        }
+    }
+
+    auto data = query.conditions.expr.data;
+    // ensure this isn't a slice of something.
+    if(data.capacity == 0)
+        data = data.dup;
+    auto s = Simplifier(data);
+    auto result = s.processSubgroup(Spec.beginAnd, 0);
+
+
+    static if(hasParams)
+    {
+        // ensure this isn't a slice of something.
+        if(query.conditions.params.capacity == 0)
+            query.conditions.params = query.conditions.params.dup;
+    }
+
+    if(result.type == TermType.bTrue)
+    {
+        // no reason to spit out WHERE TRUE
+        query.conditions.expr.data.length = 0;
+        query.conditions.expr.data.assumeSafeAppend;
+        static if(hasParams)
+        {
+            query.conditions.params.length = 0;
+            query.conditions.params.assumeSafeAppend;
+        }
+        return query;
+    }
+
+    // remove all extra separators, empty strings, and unneeded parameters.
+    size_t widx;
+    static if(hasParams)
+    {
+        size_t rpidx;
+        size_t wpidx;
+    }
+    bool outputsep = false;
+    bool firstItem = true;
+    foreach(ridx; 0 .. data.length)
+    {
+        if(data[ridx].length)
+        {
+            bool copy = true;
+            with(Spec) switch(getSpec(data[ridx]))
+            {
+            case separator:
+                copy = false;
+                if(!firstItem)
+                    outputsep = true;
+                break;
+            case endGroup:
+                firstItem = false;
+                outputsep = false;
+                break;
+            case beginAnd:
+            case beginOr:
+                firstItem = true;
+                break;
+                static if(hasParams)
+                {
+                case param:
+                    if(data[ridx].length == 2)
+                    {
+                        // legit parameter
+                        query.conditions.params[wpidx++] = query.conditions.params[rpidx++];
+                        firstItem = false;
+                    }
+                    else
+                    {
+                        // removed parameter
+                        ++rpidx;
+                        copy = false;
+                    }
+                    break;
+                }
+            default:
+                firstItem = false;
+                break;
+            }
+            if(copy)
+            {
+                if(outputsep)
+                {
+                    outputsep = false;
+                    data[widx++] = sepSpec;
+                }
+                data[widx++] = data[ridx];
+            }
+        }
+    }
+    if(widx != data.length)
+    {
+        query.conditions.expr.data = data[0 .. widx];
+        query.conditions.expr.data.assumeSafeAppend;
+    }
+    static if(hasParams)
+    {
+        if(wpidx != rpidx)
+        {
+            query.conditions.params = query.conditions.params[0 .. wpidx];
+            query.conditions.params.assumeSafeAppend;
+        }
+    }
+    return query;
+}
+
+unittest
+{
+    import sqlbuilder.dataset;
+    static struct testDB
+    {
+        int x;
+        int y;
+        int z;
+    }
+
+    DataSet!testDB ds;
+
+    static auto mkexpr(Args...)(Args args)
+    {
+        ExprString result;
+        foreach(arg; args)
+        {
+            static if(is(typeof(arg) == string))
+                result ~= arg;
+            else
+                result ~= arg.expr;
+        }
+        return result;
+    }
+
+    // start with no parameters
+    Query!(void) uq;
+    {
+        auto query = uq.select(ds)
+            .where(andSpec, ds.x, " = 5").where(ds.y, " = 6")
+            .where("NOT ", orSpec, andSpec, endGroupSpec, endGroupSpec, endGroupSpec);
+        assert(query.simplifyConditions.conditions.expr ==
+               mkexpr(ds.x, " = 5", sepSpec, ds.y, " = 6"));
+    }
+    {
+        auto query = uq.select(ds)
+            .where(orSpec, ds.x, " = 5", endGroupSpec);
+        assert(query.simplifyConditions.conditions.expr ==
+               mkexpr(ds.x, " = 5"));
+    }
+    {
+
+        auto query = uq.select(ds)
+            .where(andSpec, ds.x, " = 5")
+            .where(orSpec, ds.y, " = 6", endGroupSpec, endGroupSpec);
+        assert(query.simplifyConditions.conditions.expr ==
+               mkexpr(ds.x, " = 5", sepSpec, ds.y, " = 6"));
+    }
+    {
+        auto query = uq.select(ds)
+            .where(andSpec, ds.x, " = 5")
+            .where("NOT ", orSpec, ds.y, " = 6", endGroupSpec, endGroupSpec);
+        assert(query.simplifyConditions.conditions.expr ==
+               mkexpr(ds.x, " = 5", sepSpec, "NOT ", ds.y, " = 6"));
+    }
+    {
+        auto query = uq.select(ds)
+            .where(andSpec, ds.x, " = 5")
+            .where(andSpec, ds.y, " = 6")
+            .where(ds.z, " = 7", endGroupSpec, endGroupSpec);
+        assert(query.simplifyConditions.conditions.expr ==
+               mkexpr(ds.x, " = 5", sepSpec, ds.y, " = 6", sepSpec, ds.z, " = 7"));
+    }
+    {
+        auto query = uq.select(ds)
+            .where(ds.x, " = 5")
+            .where(orSpec, andSpec, ds.y, " = 6")
+            .where(ds.z, " = 7", endGroupSpec, endGroupSpec);
+        assert(query.simplifyConditions.conditions.expr ==
+               mkexpr(ds.x, " = 5", sepSpec, ds.y, " = 6", sepSpec, ds.z, " = 7"));
+    }
+    {
+        auto query = uq.select(ds)
+            .where(ds.x, " = 5")
+            .where(orSpec, andSpec, endGroupSpec)
+            .where(andSpec, ds.y, " = 6")
+            .where(ds.z, " = 7", endGroupSpec, endGroupSpec);
+        assert(query.simplifyConditions.conditions.expr ==
+               mkexpr(ds.x, " = 5", sepSpec, ds.y, " = 6", sepSpec, ds.z, " = 7"));
+    }
+
+    // test true/false folding
+    {
+        auto query = uq.select(ds)
+            .where(" TRUE ").where(" TRUE ").where(" TRUE ");
+        assert(query.simplifyConditions.conditions.expr.data.length == 0);
+    }
+    {
+        auto query = uq.select(ds)
+            .where(orSpec, " FALSE ")
+            .where(" FALSE ")
+            .where(" FALSE ", endGroupSpec);
+        assert(query.simplifyConditions.conditions.expr ==
+               ExprString(" FALSE "));
+    }
+    {
+        auto query = uq.select(ds)
+            .where(orSpec, ds.x, " = 5")
+            .where("TRUE", endGroupSpec);
+        assert(query.simplifyConditions.conditions.expr.data.length == 0);
+    }
+    {
+        auto query = uq.select(ds).where(andSpec, " FALSE ", endGroupSpec);
+        assert(query.simplifyConditions.conditions.expr ==
+               ExprString(" FALSE "));
+    }
+    {
+        auto query = uq.select(ds)
+            .where(ds.x, " = 5")
+            .where(" FALSE ");
+        assert(query.simplifyConditions.conditions.expr ==
+               ExprString(" FALSE "));
+    }
+
+    // test removing some parameters
+
+    import std.variant;
+    Query!Variant vq;
+    static auto mkparam(T)(T val)
+    {
+        import std.range : only;
+        return Parameter!Variant(only(Variant(val)));
+    }
+
+    {
+        auto query = vq.select(ds)
+            .where(ds.x, " = ", mkparam(5))
+            .where(orSpec, ds.y, " = ", mkparam(6))
+            .where("TRUE", endGroupSpec)
+            .where(ds.z, " = ", mkparam(7));
+        query.simplifyConditions;
+        assert(query.conditions.expr ==
+               mkexpr(ds.x, " = ", paramSpec, sepSpec, ds.z, " = ", paramSpec));
+        assert(query.conditions.params ==
+               [Variant(5), Variant(7)]);
+    }
 }
 
 ColumnDef!T exprCol(T, Args...)(Args args)
