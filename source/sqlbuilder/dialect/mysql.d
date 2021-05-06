@@ -1,5 +1,5 @@
 module sqlbuilder.dialect.mysql;
-public import sqlbuilder.dialect.common : where, changed, limit, orderBy, groupBy, exprCol, as, concat, count, ascend, descend, Parameter;
+public import sqlbuilder.dialect.common : where, changed, limit, orderBy, groupBy, exprCol, as, concat, count, ascend, descend, Parameter, simplifyConditions;
 import sqlbuilder.dialect.common : SQLImpl;
 import sqlbuilder.types;
 import sqlbuilder.traits;
