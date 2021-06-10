@@ -25,6 +25,11 @@ private Variant toVariant(T)(T val)
         import std.traits : OriginalType;
         return Variant(cast(OriginalType!T)val);
     }
+    else static if(is(T == bool))
+    {
+        // store bool as a byte
+        return Variant(cast(byte)val);
+    }
     else
     {
         return Variant(val);
@@ -131,12 +136,13 @@ private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, A
         break;
     case separator:
         if(andor.peek)
-            put(app, ") AND (");
+            put(app, " AND ");
         else
-            put(app, ") OR (");
+            put(app, " OR ");
         break;
     case beginAnd:
         andor.push(true);
+        // 2 parentheses, one for the group, and one for the first term
         put(app, "(");
         break;
     case beginOr:
@@ -318,6 +324,7 @@ string sql(Item)(Delete!Item del)
 private import std.meta : AliasSeq;
 private import std.datetime : Date, DateTime, TimeOfDay;
 private alias _typeMappings = AliasSeq!(
+    bool, "BOOLEAN", // same as TINYINT
     byte, "TINYINT",
     short, "SMALLINT", 
     int, "INT",
@@ -527,7 +534,13 @@ version(Have_mysql_native)
             // null not tolerated
             import std.conv;
             static if(is(RT == T))
-                return v.get!T;
+            {
+                static if(is(T == bool))
+                    // booleans are stored as tiny integers
+                    return v.get!byte != 0;
+                else
+                    return v.get!T;
+            }
             else static if(is(typeof(T(RT.init))))
                 return T(v.get!RT);
             else static if(is(typeof(T.fromDbValue(RT.init))))

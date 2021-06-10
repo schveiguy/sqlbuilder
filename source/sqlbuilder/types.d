@@ -132,7 +132,7 @@ struct ExprString
     void toString(Out)(Out outputRange)
     {
         import std.range : put;
-        import std.conv : to;
+        import std.format : formattedWrite;
         put(outputRange, "sql{");
         foreach(d; data)
         {
@@ -140,7 +140,7 @@ struct ExprString
             if(spec != Spec.none)
             {
                 put(outputRange, "@");
-                put(outputRange, spec.to!string);
+                formattedWrite(outputRange, "%s", spec);
                 if(d.length > 2)
                 {
                     put(outputRange, "(");

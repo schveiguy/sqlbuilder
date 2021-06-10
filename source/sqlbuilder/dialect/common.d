@@ -277,6 +277,81 @@ ref Q simplifyConditions(Q)(return ref Q query) if (isQuery!Q || is(Q : Update!T
         other
     }
 
+    static struct WherePrinter
+    {
+        string[] data;
+        void toString(Out)(Out outputRange)
+        {
+            import std.range : put;
+            import std.format : formattedWrite;
+            import sqlbuilder.util;
+            put(outputRange, "`");
+            BitStack andor;
+            andor.push(true);
+            
+            foreach(d; data)
+            {
+                with(Spec) final switch(getSpec(d))
+                {
+                case none:
+                    put(outputRange, d);
+                    break;
+                case id:
+                    put(outputRange, "`");
+                    put(outputRange, d[2 .. $]);
+                    put(outputRange, "`");
+                    break;
+                case tableid:
+                    put(outputRange, "`");
+                    put(outputRange, d[2 .. $]);
+                    put(outputRange, "`.");
+                    break;
+                case param:
+                    if(d.length == 2)
+                        put(outputRange, " ? ");
+                    else
+                        put(outputRange, " # ");
+                    break;
+                case leftJoin:
+                case rightJoin:
+                case innerJoin:
+                case outerJoin:
+                case objend:
+                    formattedWrite(outputRange, "%s", getSpec(d));
+                    break;
+                case separator:
+                    put(outputRange, andor.peek ? " && " : " || ");
+                    break;
+                case beginAnd:
+                    andor.push(true);
+                    put(outputRange, "(");
+                    break;
+                case beginOr:
+                    andor.push(false);
+                    put(outputRange, "(");
+                    break;
+                case endGroup:
+                    if(!andor.length)
+                        throw new Exception("invalid nesting");
+                    andor.pop;
+                    put(outputRange, ")");
+                    break;
+                }
+            }
+            put(outputRange, "`");
+        }
+        string toString()
+        {
+            import std.array;
+            Appender!string app;
+            toString(app);
+            return app.data;
+        }
+    }
+
+    //import std.stdio;
+    //writeln("About to simplify: ", WherePrinter(query.conditions.expr.data));
+
     static struct TermInfo
     {
         size_t bidx;
@@ -361,7 +436,7 @@ ref Q simplifyConditions(Q)(return ref Q query) if (isQuery!Q || is(Q : Update!T
             return eidx;
         }
 
-        // skip to the end of the gorup. This is ONLY valid for sub groups,
+        // skip to the end of the group. This is ONLY valid for sub groups,
         // not the outer group.
         size_t skipToGroupEnd(size_t idx)
         {
@@ -395,7 +470,7 @@ ref Q simplifyConditions(Q)(return ref Q query) if (isQuery!Q || is(Q : Update!T
             {
                 foreach(ref d; data[bidx .. eidx])
                 {
-                    if(d == paramSpec)
+                    if(getSpec(d) == Spec.param)
                         d = removedParam;
                     else
                         d = null;
@@ -424,9 +499,11 @@ ref Q simplifyConditions(Q)(return ref Q query) if (isQuery!Q || is(Q : Update!T
             case beginAnd:
             case beginOr:
                 result = processSubgroup(sp, eidx + 1);
+                //writeln("processed a subgroup: ", result);
                 if(result.type == TermType.group && result.subterms == 0)
                 {
                     // empty group, remove it completely
+                    //writeln("empty group: ", WherePrinter(data[result.bidx .. result.eidx + 1]));
                     clearData(result.bidx, result.eidx + 1);
                     // recurse, just find the next term.
                     return nextTerm(result.eidx + 1);
@@ -481,6 +558,7 @@ ref Q simplifyConditions(Q)(return ref Q query) if (isQuery!Q || is(Q : Update!T
                         }
                         result.eidx = modified.eidx;
                         result.type = modified.type;
+                        result.subterms = modified.subterms;
                         return result;
                     }
 
@@ -496,7 +574,17 @@ ref Q simplifyConditions(Q)(return ref Q query) if (isQuery!Q || is(Q : Update!T
         {
             TermInfo firstItem;
             TermInfo result;
+            import std.stdio;
+            import std.conv;
             result.bidx = eidx == 0 ? eidx : eidx - 1;
+            /+immutable firstidx = result.bidx;
+            immutable endidx = skipToGroupEnd(firstidx) + 1;
+            string beforeData = text(WherePrinter(data[firstidx .. endidx]));
+            scope(exit)
+            {
+                writeln(myGroup, ": before group was ", beforeData, "\nafter is ", WherePrinter(data[firstidx .. endidx]));
+                writeln("about to return ", result);
+            }+/
 loop:
             while(true)
             {
@@ -513,6 +601,7 @@ loop:
                     // this is a subgroup term. If it's type matches our
                     // type (and no not is applied), then we can just
                     // remove it's walls, and include it in our terms.
+                    //writeln("got group of ", item);
                     if(!item.hasNot && getSpec(data[item.bidx]) == myGroup)
                     {
                         data[item.bidx] = "";
@@ -534,6 +623,7 @@ loop:
                     {
                         // this entire group reduces down to just TRUE.
                         result.eidx = skipToGroupEnd(item.eidx);
+                        //writeln("reducing to true: ", WherePrinter(data[item.bidx .. item.eidx + 1]));
                         data[result.bidx] = data[item.bidx];
                         clearData(result.bidx + 1, result.eidx + 1);
                         result.type = item.type;
@@ -553,8 +643,9 @@ loop:
                     }
                     else if(myGroup == Spec.beginAnd)
                     {
-                        // this entire group reduces down to just TRUE.
+                        // this entire group reduces down to just FALSE.
                         result.eidx = skipToGroupEnd(item.eidx);
+                        //writeln("reducing to false: ", WherePrinter(data[item.bidx .. item.eidx + 1]));
                         data[result.bidx] = data[item.bidx];
                         clearData(result.bidx + 1, result.eidx + 1);
                         result.type = item.type;
@@ -603,7 +694,7 @@ loop:
                     data[result.bidx] = "";
                 if(result.eidx < data.length && result.eidx != firstItem.eidx)
                     data[result.eidx] = "";
-                return firstItem;
+                return result = firstItem;
             }
 
             // it must be a group at this point.
@@ -618,6 +709,9 @@ loop:
         data = data.dup;
     auto s = Simplifier(data);
     auto result = s.processSubgroup(Spec.beginAnd, 0);
+    /*import std.stdio;
+    writeln("before cleanup: ", query.conditions);
+    scope(exit) writeln("after cleanup: ", query.conditions);*/
 
     static if(hasParams)
     {
@@ -862,6 +956,21 @@ unittest
                mkexpr(ds.x, " = ", paramSpec, sepSpec, ds.z, " = ", paramSpec));
         assert(query.conditions.params ==
                [Variant(5), Variant(7)]);
+    }
+
+    // test for nested not bug where subterms wasn't forwarded
+    {
+        auto query = uq.select(ds)
+            .where(orSpec, " NOT ", orSpec, ds.x, " = 5", sepSpec, ds.y, " = 5", endGroupSpec, endGroupSpec);
+        query.simplifyConditions;
+        assert(query.conditions.expr ==
+               mkexpr(" NOT ", orSpec, ds.x, " = 5", sepSpec, ds.y, " = 5", endGroupSpec));
+    }
+    {
+        auto query = uq.select(ds)
+            .where(" NOT ", orSpec, endGroupSpec);
+        query.simplifyConditions;
+        assert(query.conditions.expr == ExprString());
     }
 }
 
