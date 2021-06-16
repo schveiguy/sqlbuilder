@@ -136,24 +136,24 @@ private void sqlPut(bool includeObjectSeparators, bool includeTableQualifiers, A
         break;
     case separator:
         if(andor.peek)
-            put(app, " AND ");
+            put(app, ") AND (");
         else
-            put(app, " OR ");
+            put(app, ") OR (");
         break;
     case beginAnd:
         andor.push(true);
         // 2 parentheses, one for the group, and one for the first term
-        put(app, "(");
+        put(app, "((");
         break;
     case beginOr:
         andor.push(false);
-        put(app, "(");
+        put(app, "((");
         break;
     case endGroup:
         if(!andor.length)
             throw new Exception("Error, inconsistent groupings");
         andor.pop;
-        put(app, ")");
+        put(app, "))");
         break;
     default:
         throw new Exception("Unknown spec in: " ~ x);
