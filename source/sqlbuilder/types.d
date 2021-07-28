@@ -123,6 +123,16 @@ struct ExprString
             data ~= other;
         return this;
     }
+    
+    private import std.range;
+    ref ExprString opOpAssign(string op: "~", R)(R other) if (isInputRange!R && is(ElementType!R == string))
+    {
+        // append only non-empty strings
+        foreach(s; other)
+            if(s.length > 0)
+                data ~= s;
+        return this;
+    }
 
     bool opCast(T: bool)()
     {
@@ -131,7 +141,6 @@ struct ExprString
 
     void toString(Out)(Out outputRange)
     {
-        import std.range : put;
         import std.format : formattedWrite;
         put(outputRange, "sql{");
         foreach(d; data)

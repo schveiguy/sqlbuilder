@@ -489,7 +489,13 @@ private template isMysqlPrimitive(T)
 {
     alias RT = dbValueType!T;
     enum isMysqlPrimitive = !is(RT == struct) || is(RT == Date)
-        || is(RT == DateTime) || is(RT == TimeOfDay);
+        || is(RT == DateTime) || is(RT == TimeOfDay) || is(RT == Variant);
+}
+
+// dialect-agnostic way to determine if a column is the object end sentinel
+bool isObjEnd(string colname) @safe pure @nogc nothrow
+{
+    return colname == "_objend";
 }
 
 // if we have mysql native as a dependency, provide direct serialization from a ResultRange
@@ -498,8 +504,8 @@ version(Have_mysql_native)
     private template columnFieldNames(T)
     {
         static if(isMysqlPrimitive!T)
-            // signal that no name is used.
-            alias columnFieldNames = AliasSeq!("");
+            // signal we have a column, but it has no fields
+            alias columnFieldNames = AliasSeq!("this");
         else
         {
             static if(isInstanceOf!(Nullable, T))
@@ -520,7 +526,6 @@ version(Have_mysql_native)
 
     private auto getLeaf(T)(Variant v) if (isMysqlPrimitive!T)
     {
-        alias RT = dbValueType!T;
         static if(is(T : Nullable!U, U))
         {
             if(v.type == typeid(typeof(null)))
@@ -529,8 +534,14 @@ version(Have_mysql_native)
             }
             return T(getLeaf!U(v));
         }
+        else static if(is(T == Variant))
+        {
+            // just return as-is
+            return v;
+        }
         else
         {
+            alias RT = dbValueType!T;
             // null not tolerated
             import std.conv;
             static if(is(RT == T))
@@ -541,10 +552,10 @@ version(Have_mysql_native)
                 else
                     return v.get!T;
             }
-            else static if(is(typeof(T(RT.init))))
-                return T(v.get!RT);
             else static if(is(typeof(T.fromDbValue(RT.init))))
                 return T.fromDbValue(v.get!RT);
+            else static if(is(typeof(T(RT.init))))
+                return T(v.get!RT);
             else static if(is(typeof(RT.init.to!T)))
                 return v.get!RT.to!T;
             else
@@ -553,7 +564,7 @@ version(Have_mysql_native)
     }
 
     import mysql.result : Row;
-    private auto getItem(T)(Row r, size_t[] colIds)
+    private auto getItem(T, IDs)(Row r, ref IDs colIds)
     {
         static if(isMysqlPrimitive!T)
         {
@@ -584,6 +595,10 @@ version(Have_mysql_native)
             }
             return result;
         }
+        else static if(__traits(hasMember, T, "deserializeRow"))
+        {
+            return T.deserializeRow(r, colIds);
+        }
         else
         {
             T result;
@@ -612,7 +627,6 @@ version(Have_mysql_native)
                     else
                     {
                         __traits(getMember, result, n) = getLeaf!(typeof(mem))(r[colIds[idx]]);
-                    //__traits(getMember, result, n) = getLeaf!(typeof(__traits(getMember, result, n)))(r[colIds[idx]]);
                     }
                 }
             }
@@ -655,7 +669,13 @@ version(Have_mysql_native)
         else
         {
             // serialization can happen, we have a type list.
-            alias colid(T) = size_t[columnFieldNames!T.length];
+            template colid(T) {
+                // specialized column id type
+                static if(__traits(hasMember, T, "initialColumnIds"))
+                    alias colid = typeof(() {return T.initialColumnIds;}());
+                else
+                    alias colid = size_t[columnFieldNames!T.length];
+            }
             import std.meta : staticMap;
             alias colT = staticMap!(colid, q.RowTypes);
             static struct SerializedRange
@@ -686,7 +706,7 @@ version(Have_mysql_native)
                         static foreach(i; 0 .. row.length)
                         {
                             row[i] = getItem!(q.RowTypes[i])(seq.front,
-                                                              colIds[i][]);
+                                                              colIds[i]);
                             static if(isInstanceOf!(Changed, typeof(row[i])))
                                 // the changed flag needs to be set based on if the previous row is equal to this row
 
@@ -735,30 +755,49 @@ version(Have_mysql_native)
                         alias realT = typeof(T.init.get());
                     else
                         alias realT = T;
-                    bool objEndFound = false;
-                    result.colIds[idx][] = size_t.max;
+                    static if(__traits(hasMember, realT, "initialColumnIds"))
+                        result.colIds[idx] = realT.initialColumnIds;
+                    else
+                        result.colIds[idx][] = size_t.max;
 objLoop:
                     while(colIdx < colNames.length)
                     {
-objSwitch:
-                        switch(colNames[colIdx])
+                        static if(__traits(hasMember, T, "mapColumnId"))
                         {
-                        case "_objend":
-                            ++colIdx;
-                            break objLoop;
-
-                            static foreach(fnum, fname; columnFieldNames!realT)
-                            {
-                            case getColumnName!(__traits(getMember, realT, fname)):
-                                result.colIds[idx][fnum] = colIdx;
-                                break objSwitch;
-                            }
-
-                        default:
+                            // the type is going to determine the column index
+                            // specifically.
+                            int colUsed = T.mapColumnId(colNames[colIdx], result.colIds[idx], colIdx);
                             static if(throwOnExtraColumns)
-                                throw new Exception("Unknown column name found: " ~ colNames[colIdx]);
-                            else
-                                break;
+                                if(colUsed < 0)
+                                    throw new Exception("Unknown column name found: " ~ colNames[colIdx]);
+                            if(colUsed == 0) // done processing, this was the last column
+                            {
+                                ++colIdx;
+                                break objLoop;
+                            }
+                        }
+                        else
+                        {
+objSwitch:
+                            switch(colNames[colIdx])
+                            {
+                            case "_objend":
+                                ++colIdx;
+                                break objLoop;
+
+                                static foreach(fnum, fname; columnFieldNames!realT)
+                                {
+                                case getColumnName!(__traits(getMember, realT, fname)):
+                                    result.colIds[idx][fnum] = colIdx;
+                                    break objSwitch;
+                                }
+
+                            default:
+                                static if(throwOnExtraColumns)
+                                    throw new Exception("Unknown column name found: " ~ colNames[colIdx]);
+                                else
+                                    break;
+                            }
                         }
                         ++colIdx;
                     }
@@ -968,5 +1007,55 @@ objSwitch:
         auto seq1 = conn.query("SELECT * FROM foo WHERE col1 <=> ?", Variant(null));
         writeln(seq1.colNames);
         writefln("result from query2: %s", conn.query("SELECT * FROM foo WHERE col1 IS NULL"));
+
+        // try a custom object
+        struct CustomObj
+        {
+            Variant[] things;
+            string[] colnames;
+
+            // custom serialization
+            struct ColId {
+                size_t startColId = -1;
+                size_t endColId = -1;
+                string[] names;
+            }
+            enum initialColumnIds = ColId.init;
+            static int mapColumnId(string colname, ref ColId ids, size_t idx)
+            {
+                if(ids.startColId == -1)
+                    ids.startColId = idx;
+                if(isObjEnd(colname))
+                {
+                    ids.endColId = idx;
+                    return 0; // sentinel reached
+                }
+                else
+                    ids.names ~= colname;
+                // not done yet
+                return 1;
+            }
+
+            static CustomObj deserializeRow(Row r, ColId ids)
+            {
+                import std.range;
+                import std.algorithm;
+                import std.array;
+                CustomObj result;
+                result.colnames = ids.names;
+                result.things = iota(ids.startColId, ids.endColId).map!(id => r[id]).array;
+                return result;
+            }
+        }
+
+        // fetch the custom row from the table
+        auto customrow = ColumnDef!CustomObj(TableDef("author", ExprString("author".makeSpec(Spec.id))), ExprString("*", objEndSpec));
+        auto query3 = select(customrow);
+        writeln("query3 is ", query3.sql);
+        foreach(co; conn.fetch(select(customrow)))
+        {
+            static assert(is(typeof(co) == CustomObj));
+            writefln("Got author row (column names = %-(%s, %)): %s", co.colnames, co.things);
+        }
     }
 }

@@ -90,18 +90,19 @@ template DataSet(T)
     alias DataSet = DataSet!(T, staticTableDef!(T));
 }
 
+static private bool _checkForLeftJoins(const TableDef td)
+{
+    if(td.joinType == Spec.leftJoin) return true;
+    foreach(dep; td.dependencies)
+        if(_checkForLeftJoins(dep)) return true;
+    return false;
+}
+
+
 struct DataSet(T, alias core)
 {
     alias RowType = T;
     enum tableDef = core;
-    static private bool _checkForLeftJoins(const TableDef td)
-    {
-        if(td.joinType == Spec.leftJoin) return true;
-        foreach(dep; td.dependencies)
-            if(_checkForLeftJoins(dep)) return true;
-        return false;
-    }
-
     enum anyNull = _checkForLeftJoins(core);
 
     @property auto opDispatch(string item)() if (isField!(T, item))
@@ -146,7 +147,7 @@ struct DataSet(T, alias core)
         else
             alias X = T;
         static auto result() {
-            return ColumnDef!X(core, ExprString(core.as.makeSpec(Spec.id), ".*",
+            return ColumnDef!X(core, ExprString(core.as.makeSpec(Spec.tableid), "*",
                                                   objEndSpec));
         }
         if(__ctfe) return result();

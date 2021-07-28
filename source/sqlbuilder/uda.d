@@ -61,18 +61,34 @@ AllowNull!T allowNull(T)(T val)
 
 /**
  * This attribute identifies the table that this column or relation refers to.
+ * Use the `mustReferTo` form to more intuitively indicate a strong relation
+ * (rather than pass a `true` as a third parameter to `refersTo`).
  *
  * The alias `foreign_table` identifies the other table type that this
  * identifier refers to.
  *
  * The name identifies the name that should be used for a column only. A
  * relation tagged with this UDA will ignore the name field.
+ *
+ * The joinType field identifies the join that should be used. By default, all
+ * joins are `LEFT` joins so as to not affect the data already selected by the
+ * join. You can override the join type when using the relation from a dataset.
+ *
+ * The strong field identifies that the relatable row must exist in the foreign
+ * table.
  */
 struct refersTo(T)
 {
     alias foreign_table = T;
     string name;
     Spec joinType = Spec.none;
+    bool strong;
+}
+
+/// ditto
+refersTo!T mustReferTo(T)(string name = null, Spec joinType = Spec.none)
+{
+    return refersTo!T(name, joinType, true);
 }
 
 /**

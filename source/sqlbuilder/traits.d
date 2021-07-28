@@ -223,6 +223,7 @@ template getColumnName(alias sym)
         enum getColumnName = __traits(identifier, sym);
 }
 
+// TODO: use some means to detect custom datasets.
 template isDataSet(T)
 {
     import std.traits : isInstanceOf;
