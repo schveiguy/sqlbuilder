@@ -1,3 +1,7 @@
+/**
+ * Copyright: 2021 Steven Schveighoffer
+ * License: Boost-1.0, see LICENSE.md
+ */
 module sqlbuilder.dialect.mysql;
 public import sqlbuilder.dialect.common : where, changed, limit, orderBy, groupBy, exprCol, as, concat, count, ascend, descend, Parameter, simplifyConditions;
 import sqlbuilder.dialect.common : SQLImpl;

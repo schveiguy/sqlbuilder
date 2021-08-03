@@ -1,3 +1,7 @@
+/**
+ * Copyright: 2021 Steven Schveighoffer
+ * License: Boost-1.0, see LICENSE.md
+ */
 module sqlbuilder.types;
 import sqlbuilder.traits;
 

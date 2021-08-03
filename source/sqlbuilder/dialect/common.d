@@ -15,6 +15,9 @@
  * base statements and then amending them for specific purposes. At the moment,
  * sqlbuilder relies on GC allocations and appending to ensure this works
  * reasonably well.
+ *
+ * Copyright: 2021 Steven Schveighoffer
+ * License: Boost-1.0, see LICENSE.md
  */
 module sqlbuilder.dialect.common;
 import sqlbuilder.traits;

@@ -1,5 +1,9 @@
 /**
- * UDA items for creating model structures for your datasets.
+ * UDA items for creating model structures for your datasets and for table
+ * creation.
+ *
+ * Copyright: 2021 Steven Schveighoffer
+ * License: Boost-1.0, see LICENSE.md
  */
 module sqlbuilder.uda;
 import sqlbuilder.types : Spec;
@@ -52,12 +56,6 @@ AllowNull!T allowNull(T)(T val)
 {
     return AllowNull!T(val);
 }
-
-/*enum RefType
-{
-    One,
-    Many,
-}*/
 
 /**
  * This attribute identifies the table that this column or relation refers to.
