@@ -87,23 +87,14 @@ private ColumnDef!T makeColumnDef(T)(const TableDef table, string tablename, str
 
 template DataSet(T)
 {
-    alias DataSet = DataSet!(T, staticTableDef!(T));
+    alias DataSet = DataSet!(T, staticTableDef!(T), false);
 }
 
-static private bool _checkForLeftJoins(const TableDef td)
-{
-    if(td.joinType == Spec.leftJoin) return true;
-    foreach(dep; td.dependencies)
-        if(_checkForLeftJoins(dep)) return true;
-    return false;
-}
-
-
-struct DataSet(T, alias core)
+struct DataSet(T, alias core, bool AN)
 {
     alias RowType = T;
     enum tableDef = core;
-    enum anyNull = _checkForLeftJoins(core);
+    enum anyNull = AN;
 
     @property auto opDispatch(string item)() if (isField!(T, item))
     {
@@ -111,6 +102,11 @@ struct DataSet(T, alias core)
         import std.typecons : Nullable;
         static if(anyNull && !is(typeof(__traits(getMember, T, item)) : Nullable!U, U))
             alias X = Nullable!(typeof(__traits(getMember, T, item)));
+        else static if(is(getAllowNullType!(__traits(getMember, T, item))))
+        {
+            // this tells the fetcher how to deal with nulls properly
+            alias X = getAllowNullType!(__traits(getMember, T, item));
+        }
         else
             alias X = typeof(__traits(getMember, T, item));
 
@@ -125,7 +121,21 @@ struct DataSet(T, alias core)
 
     template opDispatch(string item) if (isRelation!(T, item))
     {
-        @property auto opDispatch(Spec joinType = Spec.none)() if (joinType == joinType.none || isJoin(joinType))
+        @property auto opDispatch(Spec joinType = Spec.none)() if (joinType == Spec.none || isJoin(joinType))
+        {
+            // this is a relationship, use the UDAs assigned to the appropriate
+            // item to generate the new dataset.
+            enum field = getRelationField!(T, item);
+            static assert(field != null);
+            static if(item == "details" && T.stringof == "ChangeRecord")
+                pragma(msg, getRelationFor!(__traits(getMember, T, field)));
+            enum relation = getRelationFor!(__traits(getMember, T, field));
+            alias m = getMappingsFor!(__traits(getMember, T, field));
+            enum realJoinType = joinType == Spec.none ? (relation.joinType == Spec.none ? Spec.leftJoin : relation.joinType) : joinType;
+            return .DataSet!(relation.foreign_table, staticTableDef!(T, relation, realJoinType, core, m), anyNull || !relation.strong).init;
+        }
+
+        @property auto opDispatch(Strong strongOverride, Spec joinType = Spec.none)() if (joinType == Spec.none || isJoin(joinType))
         {
             // this is a relationship, use the UDAs assigned to the appropriate
             // item to generate the new dataset.
@@ -134,7 +144,7 @@ struct DataSet(T, alias core)
             enum relation = getRelationFor!(__traits(getMember, T, field));
             alias m = getMappingsFor!(__traits(getMember, T, field));
             enum realJoinType = joinType == Spec.none ? (relation.joinType == Spec.none ? Spec.leftJoin : relation.joinType) : joinType;
-            return .DataSet!(relation.foreign_table, staticTableDef!(T, relation, realJoinType, core, m)).init;
+            return .DataSet!(relation.foreign_table, staticTableDef!(T, relation, realJoinType, core, m), anyNull || !strongOverride).init;
         }
     }
 
@@ -167,7 +177,7 @@ struct DataSet(T, alias core)
 // The join name is kind of convoluted, but hard to make a unique one that
 // reads well in English. perhaps this can be improved (maybe reverse the table
 // definitions up to that point).
-auto related(T, string relationName = null, Spec joinType = Spec.none, DS1)(DS1 dataset) if (isDataSet!DS1 && (joinType == Spec.none || isJoin(joinType)))
+auto related(T, string relationName = null, Spec joinType = Spec.none, Strong strongRelation = Strong.no, DS1)(DS1 dataset) if (isDataSet!DS1 && (joinType == Spec.none || isJoin(joinType)))
 {
     static if(relationName.length)
     {
@@ -194,10 +204,16 @@ auto related(T, string relationName = null, Spec joinType = Spec.none, DS1)(DS1 
     }
     alias mappings = staticMap!(recipMapping, getMappingsFor!(__traits(getMember, T, relatedField)));
     enum revRelation = getRelationFor!(__traits(getMember, T, relatedField));
-    enum relation = refersTo!T(getTableName!T ~ "_having_" ~ revRelation.name, revRelation.joinType);
+    enum relation = refersTo!T(getTableName!T ~ "_having_" ~ revRelation.name, revRelation.joinType, strongRelation);
     enum realJoin = joinType == Spec.none ? (relation.joinType == Spec.none ? Spec.leftJoin : relation.joinType) : joinType;
-    return DataSet!(T, staticTableDef!(revRelation.foreign_table, relation, realJoin, dataset.tableDef, mappings)).init;
+    return DataSet!(T, staticTableDef!(revRelation.foreign_table, relation, realJoin, dataset.tableDef, mappings), dataset.anyNull || !strongRelation).init;
 }
+
+auto alwaysRelated(T, string relationName = null, Spec joinType = Spec.none, DS1)(DS1 dataset)
+{
+    return related!(T, relationName, joinType, Strong.yes)(dataset);
+}
+
 
 version(unittest)
 {

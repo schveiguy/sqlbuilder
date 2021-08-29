@@ -121,6 +121,7 @@ enum isRelation(T, string item) = getRelationField!(T, item) != null;
 
 template getRelationFor(alias sym)
 {
+    import std.traits : isInstanceOf;
     static foreach(u; __traits(getAttributes, sym))
     {
         static if(is(typeof(u) : refersTo!T, T))
@@ -131,6 +132,8 @@ template getRelationFor(alias sym)
                 enum result = u;
         }
         static if(is(u : refersTo!T, T))
+            enum result = u(__traits(identifier, sym));
+        static if(isInstanceOf!(mustReferTo, u))
             enum result = u(__traits(identifier, sym));
     }
     static if(is(typeof(result)))
@@ -306,18 +309,25 @@ template possibleNullColumn(alias sym)
     import std.typecons : Nullable;
     static if(is(typeof(sym) : Nullable!T, T))
         enum possibleNullColumn = true;
+    else static if(is(getAllowNullType!sym == AllowNullType!Args, Args...))
+        enum possibleNullColumn = true;
     else
+        enum possibleNullColumn = false;
+}
+
+template getAllowNullType(alias sym)
+{
+    // get the null type, which includes the default value if it's null
+    static foreach(alias att; __traits(getAttributes, sym))
     {
-        static foreach(alias att; __traits(getAttributes, sym))
-        {
-            static if(__traits(isSame, att, allowNull) || is(typeof(att) : AllowNull!T, T))
-                enum result = true;
-        }
-        static if(is(typeof(result)))
-            enum possibleNullColumn = result;
-        else
-            enum possibleNullColumn = false;
+        static if(__traits(isSame, att, allowNull))
+            alias result = AllowNullType!(typeof(sym), sym.init);
+        else static if(is(typeof(att) : AllowNull!T, T))
+                                        alias result = AllowNullType!(typeof(sym), att.nullValue);
     }
+    // if we didn't alias, then allowNull isn't present.
+    static assert(is(result), "No allowNull UDA detected on symbol " ~ __traits(identifier, sym));
+    alias getAllowNullType = result;
 }
 
 unittest
@@ -335,4 +345,9 @@ unittest
     static assert(possibleNullColumn!(TestRow.n2));
     static assert(possibleNullColumn!(TestRow.n3));
     static assert(!possibleNullColumn!(TestRow.v1));
+
+    static assert(is(getAllowNullType!(TestRow.n2) == AllowNullType!(int, 0)));
+    static assert(is(getAllowNullType!(TestRow.n3) == AllowNullType!(int, 5)));
+    static assert(!__traits(compiles, getAllowNullType!(TestRow.n1)));
+    static assert(!__traits(compiles, getAllowNullType!(TestRow.v1)));
 }

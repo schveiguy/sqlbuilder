@@ -59,6 +59,12 @@ AllowNull!T allowNull(T)(T val)
     Many,
 }*/
 
+enum Strong : bool
+{
+    no = false,
+    yes = true
+}
+
 /**
  * This attribute identifies the table that this column or relation refers to.
  * Use the `mustReferTo` form to more intuitively indicate a strong relation
@@ -82,13 +88,13 @@ struct refersTo(T)
     alias foreign_table = T;
     string name;
     Spec joinType = Spec.none;
-    bool strong;
+    Strong strong = Strong.no;
 }
 
 /// ditto
 refersTo!T mustReferTo(T)(string name = null, Spec joinType = Spec.none)
 {
-    return refersTo!T(name, joinType, true);
+    return refersTo!T(name, joinType, Strong.yes);
 }
 
 /**

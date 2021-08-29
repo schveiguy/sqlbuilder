@@ -1178,6 +1178,12 @@ template SQLImpl(Item, alias param)
         return result;
     }
 
+    Update!Item update()
+    {
+        return Update!Item.init;
+    }
+
+
     Delete!Item removeFrom(const TableDef table)
     {
         if(table.dependencies.length)

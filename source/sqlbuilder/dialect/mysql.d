@@ -351,6 +351,8 @@ private template dbValueType(T)
     import std.typecons : Nullable;
     static if(is(T : Nullable!U, U))
         alias dbValueType = .dbValueType!U;
+    else static if(is(T : AllowNullType!Args, Args...))
+        alias dbValueType = .dbValueType!(T.type);
     else static if(is(typeof(T.init.dbValue)))
     {
         alias dbValueType = typeof((){T val = T.init; return val.dbValue;}());
@@ -534,6 +536,12 @@ version(Have_mysql_native)
             }
             return T(getLeaf!U(v));
         }
+        else static if(is(T == AllowNullType!Args, Args...))
+        {
+            if(v.type == typeid(typeof(null)))
+                return T.nullVal;
+            return getLeaf!(T.type)(v);
+        }
         else static if(is(T == Variant))
         {
             // just return as-is
@@ -547,7 +555,7 @@ version(Have_mysql_native)
             static if(is(RT == T))
             {
                 static if(is(T == bool))
-                    // booleans are stored as tiny integers
+                    // booleans are stored as tiny integers, signed or unsigned
                     return v.get!byte != 0;
                 else
                     return v.get!T;
@@ -566,6 +574,8 @@ version(Have_mysql_native)
     import mysql.result : Row;
     private auto getItem(T, IDs)(Row r, ref IDs colIds)
     {
+        import std.variant : VariantException;
+        try {
         static if(isMysqlPrimitive!T)
         {
             return getLeaf!T(r[colIds[0]]);
@@ -609,6 +619,8 @@ version(Have_mysql_native)
                     import sqlbuilder.uda;
                     alias mem = __traits(getMember, T, n);
 
+                    // TODO: figure out to merge this code with the specific
+                    // AllowNullType code.
                     static foreach(alias att; __traits(getAttributes, mem))
                     {
                         static if(__traits(isSame, att, allowNull))
@@ -631,6 +643,12 @@ version(Have_mysql_native)
                 }
             }
             return result;
+        }
+        }
+        catch(VariantException ve)
+        {
+            import std.format;
+            throw new Exception(format("while attempting to fetch " ~ T.stringof ~ " having ids %s from row %s encountered variant conversion error: %s", colIds, r, ve.msg));
         }
     }
 
@@ -670,12 +688,15 @@ version(Have_mysql_native)
         {
             // serialization can happen, we have a type list.
             template colid(T) {
+                static if(is(T == Nullable!U, U))
+                    alias colid = colid!U;
                 // specialized column id type
-                static if(__traits(hasMember, T, "initialColumnIds"))
+                else static if(__traits(hasMember, T, "initialColumnIds"))
                     alias colid = typeof(() {return T.initialColumnIds;}());
                 else
                     alias colid = size_t[columnFieldNames!T.length];
             }
+
             import std.meta : staticMap;
             alias colT = staticMap!(colid, q.RowTypes);
             static struct SerializedRange
@@ -705,7 +726,7 @@ version(Have_mysql_native)
                         auto oldRow = row;
                         static foreach(i; 0 .. row.length)
                         {
-                            row[i] = getItem!(q.RowTypes[i])(seq.front,
+                            row[i] = getItem!(q.QueryTypes[i])(seq.front,
                                                               colIds[i]);
                             static if(isInstanceOf!(Changed, typeof(row[i])))
                                 // the changed flag needs to be set based on if the previous row is equal to this row
@@ -731,7 +752,7 @@ version(Have_mysql_native)
             size_t colIdx = 0;
             auto colNames = seq.colNames;
 
-            foreach(idx, T; q.RowTypes)
+            foreach(idx, T; q.QueryTypes)
             {
                 static if(isMysqlPrimitive!T)
                 {
@@ -762,11 +783,11 @@ version(Have_mysql_native)
 objLoop:
                     while(colIdx < colNames.length)
                     {
-                        static if(__traits(hasMember, T, "mapColumnId"))
+                        static if(__traits(hasMember, realT, "mapColumnId"))
                         {
                             // the type is going to determine the column index
                             // specifically.
-                            int colUsed = T.mapColumnId(colNames[colIdx], result.colIds[idx], colIdx);
+                            int colUsed = realT.mapColumnId(colNames[colIdx], result.colIds[idx], colIdx);
                             static if(throwOnExtraColumns)
                                 if(colUsed < 0)
                                     throw new Exception("Unknown column name found: " ~ colNames[colIdx]);
@@ -851,11 +872,14 @@ objSwitch:
         return r.empty ? defaultValue : r.front;
     }
 
-    auto fetchUsingKey(T, bool throwOnExtraColumns = false, Args...)(Connection conn, Args args) if (hasPrimaryKey!T && Args.length == primaryKeyFields!T.length)
+    template fetchUsingKey(T, bool throwOnExtraColumns = false) if (hasPrimaryKey!T)
     {
-        import sqlbuilder.dataset;
-        DataSet!T ds;
-        return conn.fetchOne!throwOnExtraColumns(select(ds).havingKey(ds, args));
+        auto fetchUsingKey(Args...)(Connection conn, Args args) if (Args.length == primaryKeyFields!T.length)
+        {
+            import sqlbuilder.dataset;
+            DataSet!T ds;
+            return conn.fetchOne!throwOnExtraColumns(select(ds).havingKey(ds, args));
+        }
     }
 
     auto fetchUsingKey(T, bool throwOnExtraColumns = false, Args...)(Connection conn, T defaultValue, Args args) if (hasPrimaryKey!T && Args.length == primaryKeyFields!T.length)
@@ -1003,6 +1027,11 @@ objSwitch:
         auto rds = DataSet!review.init;
         conn.perform(insert(rds.tableDef).set(rds.book_id, 1.param));
         writeln(conn.fetch(select(rds)));
+
+        // test allowNull columns
+        auto nullrating = conn.fetchOne(select(rds.rating).where(rds.book_id, " = ", 1.param));
+        assert(nullrating == -1);
+
         conn.exec("INSERT INTO foo (id, col1) VALUES (1, ?)", Nullable!int.init);
         auto seq1 = conn.query("SELECT * FROM foo WHERE col1 <=> ?", Variant(null));
         writeln(seq1.colNames);

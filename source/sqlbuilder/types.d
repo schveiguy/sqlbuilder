@@ -240,6 +240,14 @@ struct Joins(Item)
 // string based on the Dialect.
 struct Query(Item, RowT...)
 {
+    private template getFetchType(T)
+    {
+        static if(is(T == AllowNullType!Args, Args...))
+            alias getFetchType = T.type;
+        else
+            alias getFetchType = T;
+    }
+    import std.meta : staticMap;
     SQLFragment!(Item) fields;
     SQLFragment!(Item) conditions;
     SQLFragment!(Item) groups;
@@ -250,7 +258,8 @@ struct Query(Item, RowT...)
 
     // used by the serialization system to determine which rows this will
     // fetch. This is only valid if fetch was used to generate the query.
-    alias RowTypes = RowT;
+    alias RowTypes = staticMap!(getFetchType, RowT);
+    alias QueryTypes = RowT;
 
     // convenience to avoid having to use traits tricks.
     package alias ItemType = Item;
@@ -322,6 +331,12 @@ struct Delete(Item)
     SQLFragment!Item conditions;
 
     alias ItemType = Item;
+}
+
+struct AllowNullType(T, T defaultVal)
+{
+    alias type = T;
+    enum nullVal = defaultVal;
 }
 
 struct ColumnDef(T)
