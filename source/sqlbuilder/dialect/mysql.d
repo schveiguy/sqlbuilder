@@ -859,7 +859,7 @@ objSwitch:
 
     auto fetchOne(bool throwOnExtraColumns = false, QD...)(Connection conn, Query!(QD) q)
     {
-        auto r = fetch!throwOnExtraColumns(conn, q);
+        auto r = fetch!throwOnExtraColumns(conn, q.limit(1));
         import std.range : ElementType;
         if(r.empty)
             throw new Exception("No items of type " ~ ElementType!(typeof(r)).stringof ~ " retreived from query");
@@ -868,7 +868,7 @@ objSwitch:
 
     auto fetchOne(bool throwOnExtraColumns = false, T, QD...)(Connection conn, Query!(QD) q, T defaultValue)
     {
-        auto r = fetch!throwOnExtraColumns(conn, q);
+        auto r = fetch!throwOnExtraColumns(conn, q.limit(1));
         return r.empty ? defaultValue : r.front;
     }
 

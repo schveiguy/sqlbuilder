@@ -127,7 +127,12 @@ template getRelationFor(alias sym)
         static if(is(typeof(u) : refersTo!T, T))
         {
             static if(u.name == null)
-                enum result = typeof(u)(__traits(identifier, sym));
+                // make a copy with the name replaced
+                enum result = () {
+                    auto x = u;
+                    x.name = __traits(identifier, sym);
+                    return x;
+                } ();
             else
                 enum result = u;
         }

@@ -127,8 +127,6 @@ struct DataSet(T, alias core, bool AN)
             // item to generate the new dataset.
             enum field = getRelationField!(T, item);
             static assert(field != null);
-            static if(item == "details" && T.stringof == "ChangeRecord")
-                pragma(msg, getRelationFor!(__traits(getMember, T, field)));
             enum relation = getRelationFor!(__traits(getMember, T, field));
             alias m = getMappingsFor!(__traits(getMember, T, field));
             enum realJoinType = joinType == Spec.none ? (relation.joinType == Spec.none ? Spec.leftJoin : relation.joinType) : joinType;
@@ -348,6 +346,10 @@ unittest
     }
 
     // TODO: CTFE support
+    // Idea: using a custom dialect that uses strings instead of data values,
+    // store the FQN of the types needed to create the actual query. Then use a
+    // template which processes the FQN to provide a custom function that
+    // accepts the right parameter types/names.
     //auto blah = genSQL();
     //enum ctsql = genSQL();
     /*pragma(msg, ctsql);
