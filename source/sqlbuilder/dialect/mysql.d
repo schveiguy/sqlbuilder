@@ -16,7 +16,7 @@ static if(__traits(compiles, {import mysql.safe.commands;}))
     {
         return "import mysql.safe." ~ s ~ ";";
     }
-    private bool isNullVal(PType t)
+    @safe pure nothrow @nogc private bool isNullVal(PType t)
     {
         return t.kind == t.Kind.Null;
     }

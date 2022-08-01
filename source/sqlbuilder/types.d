@@ -1,6 +1,8 @@
 module sqlbuilder.types;
 import sqlbuilder.traits;
 
+@safe:
+
 enum Spec : char
 {
     none = '\0',

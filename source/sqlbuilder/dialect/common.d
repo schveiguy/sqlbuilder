@@ -1064,7 +1064,7 @@ template SQLImpl(Item, alias param)
 
     alias select = sqlbuilder.dialect.common.select;
 
-    Insert!Item insert(const(TableDef) table)
+    auto /* Insert!Item */ insert(const(TableDef) table)
     {
         if(table.dependencies.length)
             throw new Exception("Cannot insert into a joined table: " ~ table.as);
@@ -1178,13 +1178,13 @@ template SQLImpl(Item, alias param)
         return result;
     }
 
-    Update!Item update()
+    auto /* Update!Item */ update()
     {
         return Update!Item.init;
     }
 
 
-    Delete!Item removeFrom(const TableDef table)
+    auto /* Delete!Item */ removeFrom(const TableDef table)
     {
         if(table.dependencies.length)
             throw new Exception("Cannot delete from a joined table: " ~ table.as);
