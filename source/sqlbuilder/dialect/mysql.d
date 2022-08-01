@@ -5,68 +5,111 @@ import sqlbuilder.types;
 import sqlbuilder.traits;
 import sqlbuilder.util;
 
-import std.variant : Variant;
+import std.typecons : Nullable, nullable;
 
-private Variant toVariant(T)(T val)
+// determine whether
+static if(__traits(compiles, {import mysql.safe.commands;}))
 {
-    import std.typecons : Nullable;
+    version = MysqlHaveSafe;
+    import mysql.types : PType = MySQLVal, get;
+    private string _ip(string s)
+    {
+        return "import mysql.safe." ~ s ~ ";";
+    }
+    private bool isNullVal(PType t)
+    {
+        return t.kind == t.Kind.Null;
+    }
+}
+else
+{
+    import std.variant : PType = Variant;
+    private string _ip(string s) {
+        return "import mysql." ~ s ~ ";";
+    }
+    private bool isNullVal(PType t)
+    {
+        return t.type == typeid(typeof(null));
+    }
+}
+
+private PType toPType(T)(T val)
+{
     static if(is(T : Nullable!U, U))
     {
         if(val.isNull)
-            return Variant(null);
-        return toVariant(val.get);
+            return PType(null);
+        return toPType(val.get);
     }
     else static if(is(typeof(val.dbValue)))
     {
-        return toVariant(val.dbValue);
+        return toPType(val.dbValue);
     }
     else static if(is(T == enum))
     {
         import std.traits : OriginalType;
-        return Variant(cast(OriginalType!T)val);
+        return toPType(cast(OriginalType!T)val);
     }
     else static if(is(T == bool))
     {
         // store bool as a byte
-        return Variant(cast(byte)val);
+        return toPType(cast(byte)val);
     }
     else
     {
-        return Variant(val);
+        return PType(val);
     }
 }
 
 auto param(T)(T val)
 {
     import std.range : only;
-    return Parameter!Variant(only(val.toVariant));
+    return Parameter!PType(only(val.toPType));
 }
 
 auto optional(T)(T val, bool isValid)
 {
     import std.range : only;
-    return Parameter!(Variant, true)(only(val.toVariant), isValid);
+    return Parameter!(PType, true)(only(val.toPType), isValid);
 }
 
 unittest 
 {
-    auto p = "hello".param;
-    static assert(is(getParamType!(typeof(p)) == Variant));
+    version(all)
+    {
+        auto p = "hello".param;
+        static assert(is(getParamType!(typeof(p)) == PType));
 
-    import std.typecons : Nullable, nullable;
-    Nullable!int x;
-    auto p2 = x.param;
-    static assert(is(getParamType!(typeof(p2)) == Variant));
-    assert(p2.params.front.type == typeid(typeof(null)));
+        Nullable!int x;
+        auto p2 = x.param;
+        static assert(is(getParamType!(typeof(p2)) == PType));
+        assert(isNullVal(p2.params.front));
 
-    x = 5;
-    p2 = x.param;
-    assert(p2.params.front.type != typeid(typeof(null)));
-    assert(p2.params.front == 5);
+        x = 5;
+        p2 = x.param;
+        assert(!isNullVal(p2.params.front));
+        assert(p2.params.front == 5);
+    }
+    else
+    {
+        auto p = "hello".param;
+        static assert(is(getParamType!(typeof(p)) == PType));
+
+        Nullable!int x;
+        auto p2 = x.param;
+        static assert(is(getParamType!(typeof(p2)) == PType));
+        assert(p2.params.front.type == typeid(typeof(null)));
+
+        x = 5;
+        p2 = x.param;
+        assert(p2.params.front.type != typeid(typeof(null)));
+        assert(p2.params.front == 5);
+    }
 }
 
-// alias all the items from the implementation template for variant
-alias _impl = SQLImpl!(Variant, param);
+// alias all the items from the implementation template for the appropriate parameter type
+alias _impl = SQLImpl!(PType, param);
+
 static foreach(f; __traits(allMembers, _impl))
     mixin("alias " ~ f ~ " = _impl." ~ f ~ ";");
 
@@ -348,7 +391,6 @@ private alias _typeMappings = AliasSeq!(
 
 private template dbValueType(T)
 {
-    import std.typecons : Nullable;
     static if(is(T : Nullable!U, U))
         alias dbValueType = .dbValueType!U;
     else static if(is(T : AllowNullType!Args, Args...))
@@ -390,7 +432,6 @@ template createTableSql(T)
     string generate()
     {
         import std.traits;
-        import std.typecons : Nullable;
         import sqlbuilder.uda;
         import sqlbuilder.traits;
         auto result = "CREATE TABLE `" ~ getTableName!T ~ "` (";
@@ -446,7 +487,6 @@ template createRelationsSql(T)
     string[] relations()
     {
         import std.traits;
-        import std.typecons : Nullable;
         import sqlbuilder.uda;
         import sqlbuilder.traits;
         string[] result;
@@ -484,14 +524,12 @@ template createRelationsSql(T)
 }
 
 
-import std.typecons : Nullable;
-import std.traits : isInstanceOf;
 // check if a type is a primitive, vs. an aggregate with individual columns
 private template isMysqlPrimitive(T)
 {
     alias RT = dbValueType!T;
     enum isMysqlPrimitive = !is(RT == struct) || is(RT == Date)
-        || is(RT == DateTime) || is(RT == TimeOfDay) || is(RT == Variant);
+        || is(RT == DateTime) || is(RT == TimeOfDay) || is(RT == PType);
 }
 
 // dialect-agnostic way to determine if a column is the object end sentinel
@@ -503,6 +541,7 @@ bool isObjEnd(string colname) @safe pure @nogc nothrow
 // if we have mysql native as a dependency, provide direct serialization from a ResultRange
 version(Have_mysql_native)
 {
+    import std.traits : isInstanceOf;
     private template columnFieldNames(T)
     {
         static if(isMysqlPrimitive!T)
@@ -526,11 +565,11 @@ version(Have_mysql_native)
         }
     }
 
-    private auto getLeaf(T)(Variant v) if (isMysqlPrimitive!T)
+    private auto getLeaf(T)(PType v) if (isMysqlPrimitive!T)
     {
         static if(is(T : Nullable!U, U))
         {
-            if(v.type == typeid(typeof(null)))
+            if(v.isNullVal)
             {
                 return T.init;
             }
@@ -538,11 +577,11 @@ version(Have_mysql_native)
         }
         else static if(is(T == AllowNullType!Args, Args...))
         {
-            if(v.type == typeid(typeof(null)))
+            if(v.isNullVal)
                 return T.nullVal;
             return getLeaf!(T.type)(v);
         }
-        else static if(is(T == Variant))
+        else static if(is(T == PType))
         {
             // just return as-is
             return v;
@@ -571,11 +610,9 @@ version(Have_mysql_native)
         }
     }
 
-    import mysql.result : Row;
+    mixin(_ip("result : Row"));
     private auto getItem(T, IDs)(Row r, ref IDs colIds)
     {
-        import std.variant : VariantException;
-        try {
         static if(isMysqlPrimitive!T)
         {
             return getLeaf!T(r[colIds[0]]);
@@ -644,21 +681,15 @@ version(Have_mysql_native)
             }
             return result;
         }
-        }
-        catch(VariantException ve)
-        {
-            import std.format;
-            throw new Exception(format("while attempting to fetch " ~ T.stringof ~ " having ids %s from row %s encountered variant conversion error: %s", colIds, r, ve.msg));
-        }
     }
 
-    import mysql.connection;
+    mixin(_ip("connection"));
 
     // fetch a range of serialized items
     auto fetch(bool throwOnExtraColumns = false, QD...)(Connection conn, Query!(QD) q)
     {
-        import mysql.commands;
-        import mysql.result;
+        mixin(_ip("commands"));
+        mixin(_ip("result"));
         ResultRange seq;
         import std.range;
         scope(failure)
@@ -834,8 +865,8 @@ objSwitch:
 
     long fetchTotal(QP...)(Connection conn, Query!(QP) q)
     {
-        import mysql.result;
-        import mysql.commands;
+        mixin(_ip("result"));
+        mixin(_ip("commands"));
         q.limitQty = 0;
         q.limitOffset = 0;
         q.orders = q.orders.init;
@@ -894,7 +925,7 @@ objSwitch:
                                                 is(Q : Update!P, P) ||
                                                 is(Q : Delete!P, P))
     {
-        import mysql.commands;
+        mixin(_ip("commands"));
 
         if(stmt.params.empty)
         {
@@ -912,7 +943,7 @@ objSwitch:
 
     auto ref T create(T)(Connection conn, auto ref T blueprint)
     {
-        import mysql.commands;
+        mixin(_ip("commands"));
         import std.traits;
         import sqlbuilder.uda;
 
@@ -953,8 +984,8 @@ objSwitch:
     unittest
     {
         import sqlbuilder.dataset;
-        import mysql.commands;
-        import mysql.connection;
+        mixin(_ip("commands"));
+        mixin(_ip("connection"));
         import mysql.protocol.sockets;
         auto conn = new Connection(MySQLSocketType.phobos, "localhost", "test", "test", "test");
         scope(exit) conn.close();
@@ -1033,14 +1064,14 @@ objSwitch:
         assert(nullrating == -1);
 
         conn.exec("INSERT INTO foo (id, col1) VALUES (1, ?)", Nullable!int.init);
-        auto seq1 = conn.query("SELECT * FROM foo WHERE col1 <=> ?", Variant(null));
+        auto seq1 = conn.query("SELECT * FROM foo WHERE col1 <=> ?", PType(null));
         writeln(seq1.colNames);
         writefln("result from query2: %s", conn.query("SELECT * FROM foo WHERE col1 IS NULL"));
 
         // try a custom object
         struct CustomObj
         {
-            Variant[] things;
+            PType[] things;
             string[] colnames;
 
             // custom serialization
