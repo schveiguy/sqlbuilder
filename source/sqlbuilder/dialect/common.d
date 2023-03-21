@@ -1009,6 +1009,15 @@ ColumnDef!T as(T)(ColumnDef!T col, string newName)
     return exprCol!T(col, " AS ", newName.makeSpec(Spec.id));
 }
 
+T withoutAs(T)(T col)
+{
+    // remove any AS designation.
+    with(col.expr)
+        if(data.length > 2 && data[$-2] == " AS ")
+            data = data[0 .. $-2];
+    return col;
+}
+
 ConcatDef as(ConcatDef col, string newName)
 {
     return ConcatDef(col.tables, col.expr ~ " AS " ~ newName.makeSpec(Spec.id));
@@ -1019,14 +1028,16 @@ ColumnDef!long count(T)(ColumnDef!T col)
     return exprCol!long("COUNT(", col, ")");
 }
 
-ColumnDef!T ascend(T)(ColumnDef!T col)
+C ascend(C)(C col)
 {
-    return ColumnDef!T(col.table, col.expr ~ " ASC");
+    col.expr = col.expr ~ " ASC";
+    return col;
 }
 
-ColumnDef!T descend(T)(ColumnDef!T col)
+C descend(C)(C col)
 {
-    return ColumnDef!T(col.table, col.expr ~ " DESC");
+    col.expr = col.expr ~ " DESC";
+    return col;
 }
 
 ConcatDef concat(Args...)(Args args) if (Args.length > 1)

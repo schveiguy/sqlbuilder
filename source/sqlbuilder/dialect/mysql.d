@@ -1,5 +1,7 @@
 module sqlbuilder.dialect.mysql;
-public import sqlbuilder.dialect.common : where, changed, limit, orderBy, groupBy, exprCol, as, concat, count, ascend, descend, Parameter, simplifyConditions;
+public import sqlbuilder.dialect.common : where, changed, limit, orderBy,
+           groupBy, exprCol, as, withoutAs, concat, count, ascend, descend,
+           Parameter, simplifyConditions;
 import sqlbuilder.dialect.common : SQLImpl;
 import sqlbuilder.types;
 import sqlbuilder.traits;
@@ -7,7 +9,7 @@ import sqlbuilder.util;
 
 import std.typecons : Nullable, nullable;
 
-// determine whether
+// determine whether we can use safe mode.
 static if(__traits(compiles, {import mysql.safe.commands;}))
 {
     version = MysqlHaveSafe;

@@ -242,13 +242,6 @@ struct Joins(Item)
 // string based on the Dialect.
 struct Query(Item, RowT...)
 {
-    private template getFetchType(T)
-    {
-        static if(is(T == AllowNullType!Args, Args...))
-            alias getFetchType = T.type;
-        else
-            alias getFetchType = T;
-    }
     import std.meta : staticMap;
     SQLFragment!(Item) fields;
     SQLFragment!(Item) conditions;

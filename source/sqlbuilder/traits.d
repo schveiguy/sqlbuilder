@@ -335,6 +335,15 @@ template getAllowNullType(alias sym)
     alias getAllowNullType = result;
 }
 
+template getFetchType(T)
+{
+    static if(is(T == AllowNullType!Args, Args...))
+        alias getFetchType = T.type;
+    else
+        alias getFetchType = T;
+}
+
+
 unittest
 {
     import std.typecons : Nullable;

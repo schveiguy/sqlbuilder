@@ -19,3 +19,28 @@ SQLBuilder intends to be a mechanism which uses structs and functions to build a
 13. Support optional inclusion of clauses based on an Optional wrapper.
 14. Minimal allocations. Some allocation will obviously be necessary, but not required.
 15. Allow building of SQL at compile time. Might need a separate set of functions for this, when variables are neccessary.
+
+## Compile time idea
+
+Build using a specialized varible type which just stores the typename. Basically just a string. Then generate a dialect based on that. Use the dialect just as you would to build any query.
+Use that result to generate a function that takes a connection, and a set of parameters that match the type names. Inside that function, you would use the pre-built arrays to form the query, and then the variables would be filled from the parameters.
+cttype would be a function that takes a column and generates a token based on the column type that can then be later turned into a type at compile time.
+
+e.g.:
+
+```d
+static import ct = sqlbuilder.dialect.ct;
+import sqlbuilder.dialect.mysql;
+import sqlbuilder.dataset;
+
+void main()
+{
+   enum ds = DataSet!Author.init;
+   enum myq = (){ with(ct) return select(ds.name, ds.books.title).where(ds.books.rating, " = ", ds.name.cttype); }();
+   auto conn = new Connection(...);
+   foreach(authorName, booktitle; conn.fetch(bind!myq(5))) {
+      ...
+   }
+}
+
+This isn't complete, doesn't loook that great yet...
