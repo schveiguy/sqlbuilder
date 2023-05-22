@@ -692,6 +692,7 @@ version(Have_mysql_native)
     {
         mixin(_ip("commands"));
         mixin(_ip("result"));
+        import mysql.exceptions;
         ResultRange seq;
         import std.range;
         scope(failure)
@@ -699,19 +700,31 @@ version(Have_mysql_native)
             import std.stdio;
             writeln("Failed SQL is: ", q.sql!true);
         }
-        if(q.params.empty)
-        {
-            // no parameters, just execute the query
-            seq = conn.query(q.sql!true);
+        bool triedOnce = false;
+retryQuery:
+        try {
+            if(q.params.empty)
+            {
+                // no parameters, just execute the query
+                seq = conn.query(q.sql!true);
+            }
+            else
+            {
+                auto p = conn.prepare(q.sql!true);
+                import std.range : enumerate;
+                foreach(idx, arg; q.params.enumerate)
+                    p.setArg(idx, arg);
+                seq = conn.query(p);
+            }
         }
-        else
+        catch(MYXStaleConnection st)
         {
-            auto p = conn.prepare(q.sql!true);
-            import std.range : enumerate;
-            foreach(idx, arg; q.params.enumerate)
-                p.setArg(idx, arg);
-            seq = conn.query(p);
+            // connection was stale, retry the connection
+            assert(!triedOnce, "Multiple tries on stale connection!");
+            triedOnce = true;
+            goto retryQuery;
         }
+
         static if(q.RowTypes.length == 0 ||  is(q.RowTypes[0] == void))
         {
             // just return the range generated from the query, types weren't provided.
@@ -869,23 +882,35 @@ objSwitch:
     {
         mixin(_ip("result"));
         mixin(_ip("commands"));
+        import mysql.exceptions;
         q.limitQty = 0;
         q.limitOffset = 0;
         q.orders = q.orders.init;
         q.fields = SQLFragment!(q.ItemType)(ExprString("1"));
         auto sql = "SELECT COUNT(*) FROM(" ~ q.sql ~ ") `counter`";
         ResultRange seq;
-        if(q.params.empty)
-        {
-            seq = conn.query(sql);
+        bool triedOnce = false;
+retryFetchTotal:
+        try {
+
+            if(q.params.empty)
+            {
+                seq = conn.query(sql);
+            }
+            else
+            {
+                auto p = conn.prepare(sql);
+                import std.range : enumerate;
+                foreach(idx, arg; q.params.enumerate)
+                    p.setArg(idx, arg);
+                seq = conn.query(p);
+            }
         }
-        else
+        catch(MYXStaleConnection st)
         {
-            auto p = conn.prepare(sql);
-            import std.range : enumerate;
-            foreach(idx, arg; q.params.enumerate)
-                p.setArg(idx, arg);
-            seq = conn.query(p);
+            assert(!triedOnce, "Multiple tries on stale connection!");
+            triedOnce = true;
+            goto retryFetchTotal;
         }
         return seq.empty ? 0 : seq.front[0].get!long;
     }
@@ -928,18 +953,30 @@ objSwitch:
                                                 is(Q : Delete!P, P))
     {
         mixin(_ip("commands"));
+        import mysql.exceptions;
 
-        if(stmt.params.empty)
+        bool triedOnce = false;
+retryExec:
+        try
         {
-            return conn.exec(stmt.sql);
+            if(stmt.params.empty)
+            {
+                return conn.exec(stmt.sql);
+            }
+            else
+            {
+                import std.range : enumerate;
+                auto p = conn.prepare(stmt.sql);
+                foreach(idx, arg; stmt.params.enumerate)
+                    p.setArg(idx, arg);
+                return conn.exec(p);
+            }
         }
-        else
+        catch(MYXStaleConnection st)
         {
-            import std.range : enumerate;
-            auto p = conn.prepare(stmt.sql);
-            foreach(idx, arg; stmt.params.enumerate)
-                p.setArg(idx, arg);
-            return conn.exec(p);
+            assert(!triedOnce, "Multiple tries on stale connection!");
+            triedOnce = true;
+            goto retryExec;
         }
     }
 
