@@ -145,7 +145,7 @@ auto select(Q, Cols...)(Q query, Cols columns) if (isQuery!Q)
     static if(!is(typeList == Q.RowTypes))
     {
         alias QType = Query!(Q.ItemType, typeList);
-        return (() @trusted  => *cast(QType *)&query)();
+        return QType(query.tupleof);
     }
     else
         return query;
