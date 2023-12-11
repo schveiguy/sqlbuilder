@@ -543,6 +543,8 @@ bool isObjEnd(string colname) @safe pure @nogc nothrow
 // if we have mysql native as a dependency, provide direct serialization from a ResultRange
 version(Have_mysql_native)
 {
+
+    mixin(_ip("result : Row"));
     import std.traits : isInstanceOf;
     private template columnFieldNames(T)
     {
@@ -612,26 +614,208 @@ version(Have_mysql_native)
         }
     }
 
-    mixin(_ip("result : Row"));
+
+    struct DefaultObjectDeserialiezr(T)
+    {
+        static if(is(T == Nullable!U, U))
+        {
+            private alias RT = U;
+            private enum isNullType = true;
+        }
+        else
+        {
+            private alias RT = T;
+            private enum isNullType = false;
+        }
+        size_t[columnFieldNames!RT.length] colIds = size_t.max;
+        // returns true if we know about this columm otherwise false.
+        bool mapColumnId(string colname, size_t idx)
+        {
+objSwitch:
+            switch(colname)
+            {
+                static foreach(fnum, fname; columnFieldNames!RT)
+                {
+                    case getColumnName!(__traits(getMember, RT, fname)):
+                        colIds[fnum] = idx;
+                        return true;
+                }
+                default:
+                    // unhandled.
+                    return false;
+            }
+        }
+        string[] unmappedColumns()
+        {
+            string[] result;
+            static foreach(fnum, fname; columnFieldNames!RT)
+            {
+                if(colIds[fnum] == size_t.max)
+                    result ~= fname;
+            }
+            return result;
+        }
+
+        auto deserializeRow(Row r)
+        {
+            // deserialize all the data, but if any are null that can't be,
+            // make the whole thing null.
+            RT result;
+            static if(isNullType)
+                bool wholeObjNull = false;
+            bool wholeObjNull = false;
+            foreach(idx, n; columnFieldNames!RT)
+            {
+                if(colIds[idx] != size_t.max)
+                {
+                    import sqlbuilder.uda;
+                    alias mem = __traits(getMember, RT, n);
+
+                    // TODO: figure out to merge this code with the specific
+                    // AllowNullType code.
+                    static foreach(alias att; __traits(getAttributes, mem))
+                    {
+                        static if(__traits(isSame, att, allowNull))
+                            enum nullValue = typeof(mem).init;
+                        else static if(is(typeof(att) : AllowNull!U, U))
+                                                        enum nullValue = att.nullValue;
+
+                    }
+
+                    static if(is(typeof(nullValue)))
+                    {
+                        // use Nullable!X to get the data
+                        auto v = getLeaf!(Nullable!(typeof(mem)))(r[colIds[idx]]);
+                        __traits(getMember, result, n) = v.get(nullValue);
+                    }
+                    else static if(isNullType && !(is(typeof(mem) == Nullable!N, N)))
+                    {
+                        // get as nullable, then set the whole object
+                        // to null if it is null.
+                        auto v = getLeaf!(Nullable!(typeof(mem)))(r[colIds[idx]]);
+                        if(v.isNull)
+                        {
+                            wholeObjNull = true;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        __traits(getMember, result, n) = getLeaf!(typeof(mem))(r[colIds[idx]]);
+                    }
+                }
+            }
+
+            static if(isNullType)
+            {
+                if(wholeObjNull)
+                    return Nullable!RT.init; // return a null value
+                return result.nullable;
+            }
+            else
+                return result;
+        }
+    }
+
+    struct NonObjectDeserializer(T)
+    {
+        size_t colId = size_t.max;
+        bool mapColumnId(string colname, size_t idx)
+        {
+            if(colIds == size_t.max)
+            {
+                // ignore the name.
+                colIds = idx;
+                return true;
+            }
+            // only have one column
+            return false;
+        }
+
+        auto deserializeRow(Row r)
+        {
+            return getLeaf!T(r[colId]);
+        }
+    }
+
+    struct ChangeDeserializer(T)
+    {
+        static if(is(T == Changed(ColTypes), ColTypes...))
+            alias CT = ColTypes;
+        else
+            static assert(0, "ChangeDeserializer must only be used with a Changed type, not ", T);
+        size_t[CT.length] colIds = 0;
+        size_t filled = 0;
+        bool mapColumnId(string colname, size_t idx)
+        {
+            if(filled == colIdx.length)
+                return false;
+            colIds[filled++] = idx;
+            return true;
+        }
+
+        auto deserializeRow(Row r)
+        {
+            T result;
+            static foreach(idx, U; 0 .. CT.length)
+                result.val[idx] = getLeaf!U(r[colIds[idx]]);
+            return result;
+        }
+    }
+
     private auto getItem(T, IDs)(Row r, ref IDs colIds)
     {
-        static if(isMysqlPrimitive!T)
+        static if(is(T == RowObj!U, U))
+        {
+            // this is a row object, and made up of individual columns.
+            static if(is(U == Nullable!V, V))
+            {
+                // each field might be null. If any of them are null, then the
+                // whole thing is null.
+                enum isNullableType = true;
+                alias RT = V;
+                bool wholeObjNull = false;
+            }
+            else
+            {
+                enum isNullableType = false;
+                alias RT = U;
+            }
+            static if(__traits(hasMember, RT, "deserializeRow"))
+            {
+                static if(isNullableType)
+                {
+                    static if(__traits(hasMember, RT, "deserializeRowNull"))
+                    {
+                        return RT.deserializeRowNull(r, colIds);
+                    }
+                    else
+                    {
+                        // try to deserialize without a null value, catch the exception
+                        try
+                        {
+                            RT result = RT.deserializeRow(r, colIds);
+                            return result.nullable;
+                        }
+                        catch(Exception e)
+                        {
+                            // just return nullable
+                            return U.init;
+                        }
+                    }
+                }
+                else
+                {
+                    return RT.deserializeRow(r, colIds);
+                }
+            }
+            else
+            {
+            }
+        }
+        else static if(isMysqlPrimitive!T)
         {
             return getLeaf!T(r[colIds[0]]);
-        }
-        else static if(isInstanceOf!(Nullable, T))
-        {
-            // TODO: we should not be using exception handling for this...
-            try
-            {
-                T result = T(getItem!(typeof(T.init.get()))(r, colIds));
-                return result;
-            }
-            catch(Exception e)
-            {
-                // just return nullable
-                return T.init;
-            }
         }
         else static if(isInstanceOf!(Changed, T))
         {
@@ -644,44 +828,9 @@ version(Have_mysql_native)
             }
             return result;
         }
-        else static if(__traits(hasMember, T, "deserializeRow"))
-        {
-            return T.deserializeRow(r, colIds);
-        }
         else
         {
-            T result;
-            foreach(idx, n; columnFieldNames!T)
-            {
-                if(colIds[idx] != size_t.max)
-                {
-                    import sqlbuilder.uda;
-                    alias mem = __traits(getMember, T, n);
-
-                    // TODO: figure out to merge this code with the specific
-                    // AllowNullType code.
-                    static foreach(alias att; __traits(getAttributes, mem))
-                    {
-                        static if(__traits(isSame, att, allowNull))
-                            enum nullValue = typeof(mem).init;
-                        else static if(is(typeof(att) : AllowNull!U, U))
-                            enum nullValue = att.nullValue;
-
-                    }
-
-                    static if(is(typeof(nullValue)))
-                    {
-                        // use Nullable!X to get the data
-                        auto v = getLeaf!(Nullable!(typeof(mem)))(r[colIds[idx]]);
-                        __traits(getMember, result, n) = v.get(nullValue);
-                    }
-                    else
-                    {
-                        __traits(getMember, result, n) = getLeaf!(typeof(mem))(r[colIds[idx]]);
-                    }
-                }
-            }
-            return result;
+            static assert(0, "Don't know how to deserialize ", T);
         }
     }
 
@@ -725,32 +874,37 @@ retryQuery:
             goto retryQuery;
         }
 
-        static if(q.RowTypes.length == 0 ||  is(q.RowTypes[0] == void))
+        static if(q.QueryTypes.length == 0 ||  is(q.QueryTypes[0] == void))
         {
             // just return the range generated from the query, types weren't provided.
             return seq;
         }
         else
         {
-            // serialization can happen, we have a type list.
-            template colid(T) {
-                static if(is(T == Nullable!U, U))
-                    alias colid = colid!U;
-                // specialized column id type
-                else static if(__traits(hasMember, T, "initialColumnIds"))
-                    alias colid = typeof(() {return T.initialColumnIds;}());
+            // do deserialization.
+            // custom types can define a sqlbuilderDeserializer static member
+            // to initialize a custom deserializer.
+            template getDeserializer(T) {
+                static if(is(T == RowObj!U, U))
+                {
+                    else static if(__traits(hasMember, T, "sqlbuilderDeserializer"))
+                        alias getDeserializer = typeof(() {return T.sqlbuilderDeserializer;}());
+                    else
+                        alias getDeserializer = DefaultObjectDeserializer!U;
+                }
+                else static if(is(T == Changed!(Args...), Args))
+                    alias getDeserializer = ChangedDeserializer!T;
                 else
-                    alias colid = size_t[columnFieldNames!T.length];
+                    alias getDeserializer = NonObjectDeserializer!T;
             }
 
             import std.meta : staticMap;
-            alias colT = staticMap!(colid, q.RowTypes);
+            alias colT = staticMap!(getDeserializer, q.QueryTypes);
             static struct SerializedRange
             {
                 private ResultRange seq;
-                // TODO: make wrapper types for aggregates
                 private q.RowTypes row; // here is where we store the front element
-                private colT colIds;
+                private colT deserializers;
 
                 auto front()
                 {
@@ -772,10 +926,10 @@ retryQuery:
                         auto oldRow = row;
                         static foreach(i; 0 .. row.length)
                         {
-                            row[i] = getItem!(q.QueryTypes[i])(seq.front,
-                                                              colIds[i]);
+                            row[i] = deserializers[i].deserializeRow(seq.front);
                             static if(isInstanceOf!(Changed, typeof(row[i])))
-                                // the changed flag needs to be set based on if the previous row is equal to this row
+                                // the changed flag needs to be set based on if
+                                // the previous row is equal to this row
 
                                 row[i]._changed = isfirst || oldRow[i].val != row[i].val;
                         }
@@ -800,77 +954,31 @@ retryQuery:
 
             foreach(idx, T; q.QueryTypes)
             {
-                static if(isMysqlPrimitive!T)
+                static if(is(T == RowObj!U, U))
                 {
-                    assert(colIdx < colNames.length);
-                    result.colIds[idx][0] = colIdx;
-                    ++colIdx;
-                }
-                else static if(isInstanceOf!(Changed, T))
-                {
-                    // always the same number of columns
-                    foreach(ref cid; result.colIds[idx])
+                    // handle this differently, because this could have a
+                    // custom deserializer, and we want to avoid passing in the
+                    // object end marker.
+                    static if(__traits(hasMember, U, "sqlbuilderDeserializer"))
+                        result.colIds[idx] = U.sqlbuilderDeserializer;
+                    // serialize columns until we hit _objEnd
+                    while(!isObjEnd(colNames[colIdx]))
                     {
-                        assert(colIdx < colNames.length);
-                        cid = colIdx++;
-                    }
-                }
-                else
-                () { // lambda because of the labels
-                    static assert(!isMysqlPrimitive!T);
-                    static if(isInstanceOf!(Nullable, T))
-                        alias realT = typeof(T.init.get());
-                    else
-                        alias realT = T;
-                    static if(__traits(hasMember, realT, "initialColumnIds"))
-                        result.colIds[idx] = realT.initialColumnIds;
-                    else
-                        result.colIds[idx][] = size_t.max;
-objLoop:
-                    while(colIdx < colNames.length)
-                    {
-                        static if(__traits(hasMember, realT, "mapColumnId"))
+                        if(!result.deserializers[idx].mapColumnId(colNames[colIdx], colIdx))
                         {
-                            // the type is going to determine the column index
-                            // specifically.
-                            int colUsed = realT.mapColumnId(colNames[colIdx], result.colIds[idx], colIdx);
                             static if(throwOnExtraColumns)
-                                if(colUsed < 0)
-                                    throw new Exception("Unknown column name found: " ~ colNames[colIdx]);
-                            if(colUsed == 0) // done processing, this was the last column
-                            {
-                                ++colIdx;
-                                break objLoop;
-                            }
-                        }
-                        else
-                        {
-objSwitch:
-                            switch(colNames[colIdx])
-                            {
-                            case "_objend":
-                                ++colIdx;
-                                break objLoop;
-
-                                static foreach(fnum, fname; columnFieldNames!realT)
-                                {
-                                case getColumnName!(__traits(getMember, realT, fname)):
-                                    result.colIds[idx][fnum] = colIdx;
-                                    break objSwitch;
-                                }
-
-                            default:
-                                static if(throwOnExtraColumns)
-                                    throw new Exception("Unknown column name found: " ~ colNames[colIdx]);
-                                else
-                                    break;
-                            }
+                                throw new Exception("Unknown column name found: " ~ colNames[colIdx]);
                         }
                         ++colIdx;
                     }
-
-                    // TODO: check for required fields?
-                } ();
+                    ++colIdx; // skip the object end.
+                }
+                else
+                {
+                    // Let the deserializer decide how many columns to accept
+                    while(result.deserializers[idx].mapColumnId(colNames[colIdx], colIdx))
+                        ++colIdx;
+                }
             }
 
             result.loadItem(true);
@@ -921,7 +1029,7 @@ retryFetchTotal:
         import std.range : ElementType;
         if(r.empty)
             throw new Exception("No items of type " ~ ElementType!(typeof(r)).stringof ~ " retreived from query");
-        return fetch!throwOnExtraColumns(conn, q).front;
+        return r.front;
     }
 
     auto fetchOne(bool throwOnExtraColumns = false, T, QD...)(Connection conn, Query!(QD) q, T defaultValue)
@@ -1108,43 +1216,37 @@ retryExec:
         writefln("result from query2: %s", conn.query("SELECT * FROM foo WHERE col1 IS NULL"));
 
         // try a custom object
-        struct CustomObj
+        static struct CustomObj
         {
             PType[] things;
             string[] colnames;
 
             // custom serialization
-            struct ColId {
+            struct CustomObjSerializer {
                 size_t startColId = -1;
                 size_t endColId = -1;
                 string[] names;
-            }
-            enum initialColumnIds = ColId.init;
-            static int mapColumnId(string colname, ref ColId ids, size_t idx)
-            {
-                if(ids.startColId == -1)
-                    ids.startColId = idx;
-                if(isObjEnd(colname))
+                static bool mapColumnId(string colname, size_t idx)
                 {
-                    ids.endColId = idx;
-                    return 0; // sentinel reached
+                    if(startColId == -1)
+                        startColId = idx;
+                    endColId = idx + 1;
+                    names ~= colname;
+                    return true;
                 }
-                else
-                    ids.names ~= colname;
-                // not done yet
-                return 1;
-            }
 
-            static CustomObj deserializeRow(Row r, ColId ids)
-            {
-                import std.range;
-                import std.algorithm;
-                import std.array;
-                CustomObj result;
-                result.colnames = ids.names;
-                result.things = iota(ids.startColId, ids.endColId).map!(id => r[id]).array;
-                return result;
+                CustomObj deserializeRow(Row r)
+                {
+                    import std.range;
+                    import std.algorithm;
+                    import std.array;
+                    CustomObj result;
+                    result.colnames = names;
+                    result.things = iota(startColId, endColId).map!(id => r[id]).array;
+                    return result;
+                }
             }
+            enum sqlbuilderDeserializer = CustomObjSerializer.init;
         }
 
         // fetch the custom row from the table

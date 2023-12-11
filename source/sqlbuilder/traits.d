@@ -339,6 +339,8 @@ template getFetchType(T)
 {
     static if(is(T == AllowNullType!Args, Args...))
         alias getFetchType = T.type;
+    else static if(is(T == RowObj!U))
+        alias getFetchType = U;
     else
         alias getFetchType = T;
 }
