@@ -155,7 +155,7 @@ struct DataSet(T, alias core, bool AN)
         else
             alias X = T;
         static auto result() {
-            return ColumnDef!(RowObj!T)(core, ExprString(core.as.makeSpec(Spec.tableid), "*",
+            return ColumnDef!(RowObj!X)(core, ExprString(core.as.makeSpec(Spec.tableid), "*",
                                                   objEndSpec));
         }
         if(__ctfe) return result();

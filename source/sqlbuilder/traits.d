@@ -56,7 +56,8 @@ template isField(T, string item)
     // TODO: we ignore functions for now, but possibly we may want to include them.
     static if(__traits(hasMember, T, item))
     {
-        enum isField = !__traits(compiles, () {
+        enum isField = !is(__traits(getMember, T, item)) &&
+            !__traits(compiles, () {
                 auto x = __traits(getMember, T, item);
             }) &&
             !hasUDA!(__traits(getMember, T, item), ignore) &&
@@ -248,7 +249,7 @@ template isQuery(T)
 template getQueryTypeList(Q, Cols...)
 {
     import std.meta : AliasSeq;
-    static if(Q.RowTypes.length == 1 && is(Q.RowTypes[0] == void))
+    static if(Q.QueryTypes.length == 1 && is(Q.QueryTypes[0] == void))
         alias getQueryTypeList = AliasSeq!(void);
     else
     {
@@ -269,7 +270,7 @@ template getQueryTypeList(Q, Cols...)
         static if(newTypes.length == 1 && is(newTypes[0] == void))
             alias getQueryTypeList = AliasSeq!(void);
         else
-            alias getQueryTypeList = AliasSeq!(Q.RowTypes, newTypes);
+            alias getQueryTypeList = AliasSeq!(Q.QueryTypes, newTypes);
     }
 }
 
@@ -339,7 +340,7 @@ template getFetchType(T)
 {
     static if(is(T == AllowNullType!Args, Args...))
         alias getFetchType = T.type;
-    else static if(is(T == RowObj!U))
+    else static if(is(T == RowObj!U, U))
         alias getFetchType = U;
     else
         alias getFetchType = T;

@@ -543,32 +543,10 @@ bool isObjEnd(string colname) @safe pure @nogc nothrow
 // if we have mysql native as a dependency, provide direct serialization from a ResultRange
 version(Have_mysql_native)
 {
+    private import sqlbuilder.dialect.impl : objFieldNames;
 
     mixin(_ip("result : Row"));
     import std.traits : isInstanceOf;
-    private template columnFieldNames(T)
-    {
-        static if(isMysqlPrimitive!T)
-            // signal we have a column, but it has no fields
-            alias columnFieldNames = AliasSeq!("this");
-        else
-        {
-            static if(isInstanceOf!(Nullable, T))
-                alias columnFieldNames = columnFieldNames!(typeof(T.init.get()));
-            else static if(isInstanceOf!(Changed, T))
-            {
-                import std.meta : Repeat;
-                alias columnFieldNames = Repeat!(typeof(T.val).length, "");
-            }
-            else
-            {
-                import std.meta : Filter;
-                enum includeIt(string fieldname) = isField!(T, fieldname);
-                alias columnFieldNames = Filter!(includeIt, __traits(allMembers, T));
-            }
-        }
-    }
-
     private auto getLeaf(T)(PType v) if (isMysqlPrimitive!T)
     {
         static if(is(T : Nullable!U, U))
@@ -615,7 +593,7 @@ version(Have_mysql_native)
     }
 
 
-    struct DefaultObjectDeserialiezr(T)
+    struct DefaultObjectDeserializer(T)
     {
         static if(is(T == Nullable!U, U))
         {
@@ -627,14 +605,14 @@ version(Have_mysql_native)
             private alias RT = T;
             private enum isNullType = false;
         }
-        size_t[columnFieldNames!RT.length] colIds = size_t.max;
+        size_t[objFieldNames!RT.length] colIds = size_t.max;
         // returns true if we know about this columm otherwise false.
         bool mapColumnId(string colname, size_t idx)
         {
 objSwitch:
             switch(colname)
             {
-                static foreach(fnum, fname; columnFieldNames!RT)
+                static foreach(fnum, fname; objFieldNames!RT)
                 {
                     case getColumnName!(__traits(getMember, RT, fname)):
                         colIds[fnum] = idx;
@@ -648,7 +626,7 @@ objSwitch:
         string[] unmappedColumns()
         {
             string[] result;
-            static foreach(fnum, fname; columnFieldNames!RT)
+            static foreach(fnum, fname; objFieldNames!RT)
             {
                 if(colIds[fnum] == size_t.max)
                     result ~= fname;
@@ -663,8 +641,7 @@ objSwitch:
             RT result;
             static if(isNullType)
                 bool wholeObjNull = false;
-            bool wholeObjNull = false;
-            foreach(idx, n; columnFieldNames!RT)
+            foreach(idx, n; objFieldNames!RT)
             {
                 if(colIds[idx] != size_t.max)
                 {
@@ -698,6 +675,8 @@ objSwitch:
                             wholeObjNull = true;
                             break;
                         }
+                        else
+                            __traits(getMember, result, n) = v.get;
                     }
                     else
                     {
@@ -722,10 +701,10 @@ objSwitch:
         size_t colId = size_t.max;
         bool mapColumnId(string colname, size_t idx)
         {
-            if(colIds == size_t.max)
+            if(colId == size_t.max)
             {
                 // ignore the name.
-                colIds = idx;
+                colId = idx;
                 return true;
             }
             // only have one column
@@ -740,7 +719,7 @@ objSwitch:
 
     struct ChangeDeserializer(T)
     {
-        static if(is(T == Changed(ColTypes), ColTypes...))
+        static if(is(T == Changed!(ColTypes), ColTypes...))
             alias CT = ColTypes;
         else
             static assert(0, "ChangeDeserializer must only be used with a Changed type, not ", T);
@@ -748,7 +727,7 @@ objSwitch:
         size_t filled = 0;
         bool mapColumnId(string colname, size_t idx)
         {
-            if(filled == colIdx.length)
+            if(filled == colIds.length)
                 return false;
             colIds[filled++] = idx;
             return true;
@@ -757,80 +736,9 @@ objSwitch:
         auto deserializeRow(Row r)
         {
             T result;
-            static foreach(idx, U; 0 .. CT.length)
+            static foreach(idx, U; CT)
                 result.val[idx] = getLeaf!U(r[colIds[idx]]);
             return result;
-        }
-    }
-
-    private auto getItem(T, IDs)(Row r, ref IDs colIds)
-    {
-        static if(is(T == RowObj!U, U))
-        {
-            // this is a row object, and made up of individual columns.
-            static if(is(U == Nullable!V, V))
-            {
-                // each field might be null. If any of them are null, then the
-                // whole thing is null.
-                enum isNullableType = true;
-                alias RT = V;
-                bool wholeObjNull = false;
-            }
-            else
-            {
-                enum isNullableType = false;
-                alias RT = U;
-            }
-            static if(__traits(hasMember, RT, "deserializeRow"))
-            {
-                static if(isNullableType)
-                {
-                    static if(__traits(hasMember, RT, "deserializeRowNull"))
-                    {
-                        return RT.deserializeRowNull(r, colIds);
-                    }
-                    else
-                    {
-                        // try to deserialize without a null value, catch the exception
-                        try
-                        {
-                            RT result = RT.deserializeRow(r, colIds);
-                            return result.nullable;
-                        }
-                        catch(Exception e)
-                        {
-                            // just return nullable
-                            return U.init;
-                        }
-                    }
-                }
-                else
-                {
-                    return RT.deserializeRow(r, colIds);
-                }
-            }
-            else
-            {
-            }
-        }
-        else static if(isMysqlPrimitive!T)
-        {
-            return getLeaf!T(r[colIds[0]]);
-        }
-        else static if(isInstanceOf!(Changed, T))
-        {
-            // specialized version, we do not process by field names, but by
-            // the tuple stored in the type.
-            T result;
-            static foreach(idx; 0 .. T.val.length)
-            {
-                result.val[idx] = getLeaf!(typeof(result.val[idx]))(r[colIds[idx]]);
-            }
-            return result;
-        }
-        else
-        {
-            static assert(0, "Don't know how to deserialize ", T);
         }
     }
 
@@ -887,13 +795,15 @@ retryQuery:
             template getDeserializer(T) {
                 static if(is(T == RowObj!U, U))
                 {
-                    else static if(__traits(hasMember, T, "sqlbuilderDeserializer"))
-                        alias getDeserializer = typeof(() {return T.sqlbuilderDeserializer;}());
+                    static if(__traits(hasMember, U, "initialColumnIds"))
+                        static assert(0, "initialColumnIds is no longer the correct way to hook custom deserialization. please use sqlbuilderDeserializer.");
+                    static if(__traits(hasMember, U, "sqlbuilderDeserializer"))
+                        alias getDeserializer = typeof(() {return U.sqlbuilderDeserializer;}());
                     else
                         alias getDeserializer = DefaultObjectDeserializer!U;
                 }
-                else static if(is(T == Changed!(Args...), Args))
-                    alias getDeserializer = ChangedDeserializer!T;
+                else static if(is(T == Changed!(Args), Args...))
+                    alias getDeserializer = ChangeDeserializer!T;
                 else
                     alias getDeserializer = NonObjectDeserializer!T;
             }
@@ -924,9 +834,10 @@ retryQuery:
                     if(!seq.empty)
                     {
                         auto oldRow = row;
+                        auto sqlRow = seq.front;
                         static foreach(i; 0 .. row.length)
                         {
-                            row[i] = deserializers[i].deserializeRow(seq.front);
+                            row[i] = deserializers[i].deserializeRow(sqlRow);
                             static if(isInstanceOf!(Changed, typeof(row[i])))
                                 // the changed flag needs to be set based on if
                                 // the previous row is equal to this row
@@ -960,7 +871,7 @@ retryQuery:
                     // custom deserializer, and we want to avoid passing in the
                     // object end marker.
                     static if(__traits(hasMember, U, "sqlbuilderDeserializer"))
-                        result.colIds[idx] = U.sqlbuilderDeserializer;
+                        result.deserializers[idx] = U.sqlbuilderDeserializer;
                     // serialize columns until we hit _objEnd
                     while(!isObjEnd(colNames[colIdx]))
                     {
@@ -976,7 +887,8 @@ retryQuery:
                 else
                 {
                     // Let the deserializer decide how many columns to accept
-                    while(result.deserializers[idx].mapColumnId(colNames[colIdx], colIdx))
+                    while(colIdx < colNames.length &&
+                            result.deserializers[idx].mapColumnId(colNames[colIdx], colIdx))
                         ++colIdx;
                 }
             }
@@ -1226,7 +1138,7 @@ retryExec:
                 size_t startColId = -1;
                 size_t endColId = -1;
                 string[] names;
-                static bool mapColumnId(string colname, size_t idx)
+                bool mapColumnId(string colname, size_t idx)
                 {
                     if(startColId == -1)
                         startColId = idx;
@@ -1250,7 +1162,7 @@ retryExec:
         }
 
         // fetch the custom row from the table
-        auto customrow = ColumnDef!CustomObj(TableDef("author", ExprString("author".makeSpec(Spec.id))), ExprString("*", objEndSpec));
+        auto customrow = ColumnDef!(RowObj!CustomObj)(TableDef("author", ExprString("author".makeSpec(Spec.id))), ExprString("*", objEndSpec));
         auto query3 = select(customrow);
         writeln("query3 is ", query3.sql);
         foreach(co; conn.fetch(select(customrow)))

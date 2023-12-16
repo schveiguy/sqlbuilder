@@ -1,4 +1,5 @@
 module sqlbuilder.dialect.sqlite;
+/+version(none):
 
 public import sqlbuilder.dialect.common : where, changed, limit, orderBy,
            groupBy, exprCol, as, withoutAs, concat, count, ascend, descend,
@@ -478,4 +479,4 @@ template createTableSql(T, bool doForeignKeys = false)
     enum createTableSql = generate();
 }
 
-enum dropTableSql(T) = `DROP TABLE IF EXISTS "` ~ getTableName!T ~ `"`;
+enum dropTableSql(T) = `DROP TABLE IF EXISTS "` ~ getTableName!T ~ `"`;+/
