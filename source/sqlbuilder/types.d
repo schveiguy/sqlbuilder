@@ -357,8 +357,40 @@ struct Changed(ColTypes...)
     bool opCast(T : bool)() { return _changed; }
 }
 
+// this specialized struct is something that is used as a placeholder for a
+// type that is actually a row. This happens when you select an entire row from
+// the DB instead of a single column. This expects an _objEnd column to define
+// where the row pieces stop.
+// This never should be seen by user code.
+package struct RowObj(T)
+{
+}
+
 // basic expression for strings. Used to provide literal SQL to ExprString.
 struct Expr
 {
     string expr;
 }
+
+// Deserialization game plan:
+//
+// 1. A RowObj of a Nullable!T:
+//    a. T.deserializeRowNull exists? use it
+//    b. T.deserializeRow exists? use it, catch any exception and set to null
+//    c. Process all fields in the struct, if any of the fields are null, but are not Nullable themselves, the whole object is null.
+// 2. A RowObj of a non-Nullable T:
+//    a. T.deserializeRow exists? use it
+//    b. Process all fields in the struct.
+// 3. Changes struct
+//    a. do the deserialization, compare with previous version. Set up struct
+//
+// The rest are for SINGLE COLUMN types (leaf types):
+// 4. Nullable!T
+//    a. Is the value null? return Nullable!T.init
+//    b. Else, deserialize T
+// 5. T that has dbValue/fromDbValue
+//    a. return T.fromDbValue;
+// 6. other dialect specific hooked types (e.g. DateTime, values that can marshal to/from strings)
+//    a. Deserialize according to the dialect rules.
+// 7. primitive types:
+//    a. Deserialize according to the dialect rules.

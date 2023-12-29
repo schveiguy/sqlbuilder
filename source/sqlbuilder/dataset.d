@@ -155,7 +155,7 @@ struct DataSet(T, alias core, bool AN)
         else
             alias X = T;
         static auto result() {
-            return ColumnDef!X(core, ExprString(core.as.makeSpec(Spec.tableid), "*",
+            return ColumnDef!(RowObj!X)(core, ExprString(core.as.makeSpec(Spec.tableid), "*",
                                                   objEndSpec));
         }
         if(__ctfe) return result();
@@ -259,7 +259,7 @@ version(unittest)
 
 version(unittest)
     import sqlbuilder.testing;
-unittest
+version(Have_mysql_native) unittest
 {
     import sqlbuilder.dialect.mysql;
     import sqlbuilder.types;
