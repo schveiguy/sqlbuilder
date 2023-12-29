@@ -21,6 +21,7 @@ alias Blob = const(ubyte)[];
 // complex, because none of the types are complex.
 struct PType
 {
+    private import std.range;
     enum Tag
     {
         Integer,
@@ -153,6 +154,37 @@ struct PType
             else
                 static assert(false, "Cannot get type " ~ T.stringof ~ " from PType");
         }
+    }
+
+    void toString(Out)(ref Out output) if (isOutputRange!(Out, dchar))
+    {
+        import std.format;
+        with(Tag) final switch(_tag)
+        {
+            case Integer:
+                formattedWrite(output, "%s", _value.longData);
+                break;
+            case Float:
+                formattedWrite(output, "%s", _value.doubleData);
+                break;
+            case Text:
+                formattedWrite(output, "%s", _value.stringData);
+                break;
+            case Blob:
+                formattedWrite(output, "[%(0x%02x, %)]", _value.blobData);
+                break;
+            case Null:
+                put(output, "null");
+                break;
+        }
+    }
+
+    string toString()
+    {
+        import std.array;
+        Appender!string app;
+        toString(app);
+        return app.data;
     }
 }
 
@@ -1090,7 +1122,6 @@ objSwitch:
         if(std.file.exists(tmpfilename))
             std.file.remove(tmpfilename);
         auto conn = Database(tmpfilename);
-        scope(exit) conn.close();
 
         conn.execute(createTableSql!(Author, true));
         conn.execute(createTableSql!(book, true));
