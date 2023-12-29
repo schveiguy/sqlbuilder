@@ -1,11 +1,12 @@
 # SQL Builder and database serializer
 
-sqlbuilder is a small library that is used to make dynamically created sql easier to write. It also can serve as an abstraction layer for multiple database implementations. Currently, only MySQL is supported, but it has been designed to allow for PostgreSQL and SQLite support. Other systems may also fit within the system, but I have not focused on anything other than those three.
+sqlbuilder is a small library that is used to make dynamically created sql easier to write. It also can serve as an abstraction layer for multiple database implementations. Currently, MySQL and sqlite are supported, with PostgreSQL support planned. Other systems may also fit within the design, but I have not focused on anything other than those three.
 
 ## Implemented Features
 
 * Declarative syntax for tables and joins
 * Joins are automatically handled by the building functions. Joins are only used when data from that join is needed.
+* Statements that don't allow joins should be wrapped with dialect-specific mechanisms.
 * Wrap any type that represents a row as a `DataSet` and it can be used to query that data.
 * UDAs to specify relationships and specialized handling of columns. Relationships are provided in `DataSet` to allow joins automatically to be added.
 * Add columns to select, orderings, conditional clauses at any time (out of order construction). Individual clauses must be built in order.
@@ -21,7 +22,7 @@ sqlbuilder is a small library that is used to make dynamically created sql easie
 ## Planned features
 * Compile-time generation of SQL for queries without parameters.
 * Integration with PostgreSQL
-* Integration with SQLite
 * Support alternate allocation schemes (currently, everthing is done via GC arrays). Possibly some small-array optimization for `ExprString`.
 * Investigate the possibility of avoiding allocating a full string for SQL queries.
 * Add ways to insert related rows (for example, a record of an Author might provide an "addBook" function automatically which has as parameters the non-key related items).
+* Support CTE and subqueries
