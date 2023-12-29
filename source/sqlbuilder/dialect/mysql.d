@@ -534,12 +534,6 @@ private template isMysqlPrimitive(T)
         || is(RT == DateTime) || is(RT == TimeOfDay) || is(RT == PType);
 }
 
-// dialect-agnostic way to determine if a column is the object end sentinel
-bool isObjEnd(string colname) @safe pure @nogc nothrow
-{
-    return colname == "_objend";
-}
-
 // if we have mysql native as a dependency, provide direct serialization from a ResultRange
 version(Have_mysql_native)
 {
@@ -591,7 +585,6 @@ version(Have_mysql_native)
                 static assert(0, "Cannot figure out how to convert database value of type " ~ RT.stringof ~ " to D type " ~ T.stringof);
         }
     }
-
 
     struct DefaultObjectDeserializer(T)
     {
@@ -873,7 +866,7 @@ retryQuery:
                     static if(__traits(hasMember, U, "sqlbuilderDeserializer"))
                         result.deserializers[idx] = U.sqlbuilderDeserializer;
                     // serialize columns until we hit _objEnd
-                    while(!isObjEnd(colNames[colIdx]))
+                    while(colNames[colIdx] != "_objend")
                     {
                         if(!result.deserializers[idx].mapColumnId(colNames[colIdx], colIdx))
                         {

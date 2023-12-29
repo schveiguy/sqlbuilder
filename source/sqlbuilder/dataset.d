@@ -259,7 +259,7 @@ version(unittest)
 
 version(unittest)
     import sqlbuilder.testing;
-unittest
+version(Have_mysql_native) unittest
 {
     import sqlbuilder.dialect.mysql;
     import sqlbuilder.types;
