@@ -874,10 +874,20 @@ objSwitch:
                 p.bind(idxi, arg.get!double);
                 break;
             case Text:
-                p.bind(idxi, arg.get!string);
+                // work around null pointer bug.
+                // See https://github.com/dlang-community/d2sqlite3/issues/77
+                auto str = arg.get!string;
+                if(str.ptr is null)
+                    str = "";
+                p.bind(idxi, str);
                 break;
             case Blob:
-                p.bind(idxi, arg.get!(.Blob));
+                // work around null pointer bug.
+                // See https://github.com/dlang-community/d2sqlite3/issues/77
+                auto data = arg.get!(.Blob);
+                if(data.ptr is null)
+                    data = (data.ptr + 1)[0 .. 0];
+                p.bind(idxi, data);
                 break;
             case Null:
                 p.bind(idxi, null);
@@ -1072,7 +1082,7 @@ objSwitch:
     {
         import std.range : enumerate;
         import std.stdio;
-        scope(failure) writeln("failed statement is ", stmt.sql);
+        scope(failure) writeln("failed statement is ", stmt.sql, " fields are ", stmt.params);
         auto p = conn.prepare(stmt.sql);
         foreach(idx, arg; stmt.params.enumerate)
             p.setArg(idx, arg);
