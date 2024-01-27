@@ -11,7 +11,7 @@ import sqlbuilder.traits;
 import sqlbuilder.util;
 
 import std.typecons : Nullable, nullable;
-import std.datetime : DateTime;
+import std.datetime : DateTime, Date, SysTime;
 import std.traits;
 import std.conv;
 
@@ -78,9 +78,9 @@ struct PType
             _value.blobData = null;
             _tag = Tag.Null;
         }
-        else static if(is(T == DateTime))
+        else static if(is(T == DateTime) || is(T == SysTime) || is(T == Date))
         {
-            _value.stringData = val.toSimpleString;
+            _value.stringData = val.toISOExtString;
             _tag = Tag.Text;
         }
         else static if(canStringMarshal!T || isSomeString!T)
@@ -512,8 +512,8 @@ private T parseFromString(T)(string textData)
         return textData.to!T;
     // handle the timestamp types specially, these are very common DB types.
     // TODO: handle all the time types
-    else static if(is(T == DateTime))
-        return DateTime.fromSimpleString(textData);
+    else static if(is(T == DateTime) || is(T == SysTime) || is(T == Date))
+        return T.fromISOExtString(textData);
     else static if(is(typeof(T.fromString(textData))))
         return T.fromString(textData);
     else static if(is(typeof(to!T(textData))))
@@ -545,13 +545,14 @@ private template getFieldType(T)
 
 
 // generate an SQL statement to insert a table definition.
-template createTableSql(T, bool doForeignKeys = false)
+template createTableSql(T, bool doForeignKeys = false, bool ifNotExists = false)
 {
     string generate()
     {
         import sqlbuilder.uda;
         import sqlbuilder.traits;
-        auto result = `CREATE TABLE "` ~ getTableName!T ~ `" (`;
+        auto result = `CREATE TABLE ` ~ (ifNotExists ? `IF NOT EXISTS ` : ``) ~
+            `"` ~ getTableName!T ~ `" (`;
         int autoIncFields = 0;
         foreach(field; FieldNameTuple!T)
         {
@@ -788,6 +789,8 @@ objSwitch:
                     {
                         // get as nullable, then set the whole object
                         // to null if it is null.
+                        static if(is(typeof(mem) == void))
+                            pragma(msg, n);
                         auto v = getLeaf!(Nullable!(typeof(mem)))(r.getPType(colIds[idx]));
                         if(v.isNull)
                         {

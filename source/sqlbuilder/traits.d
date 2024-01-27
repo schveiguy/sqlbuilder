@@ -56,16 +56,11 @@ template isField(T, string item)
     // TODO: we ignore functions for now, but possibly we may want to include them.
     static if(__traits(hasMember, T, item))
     {
-        enum isField = !is(__traits(getMember, T, item)) &&
-            !__traits(compiles, () {
-                auto x = __traits(getMember, T, item);
-            }) &&
-            !hasUDA!(__traits(getMember, T, item), ignore) &&
-            !is(typeof(__traits(getMember, T, item)) == Relation) &&
-            !is(typeof(__traits(getMember, T, item)) == function);
-            /*item != "opAssign" &&
-            item != "opCmp" &&
-            item != ;*/
+        enum isField = !is(__traits(getMember, T, item)) && // not a type
+            // is a field with an offset
+            __traits(compiles, __traits(getMember, T, item).offsetof) &&
+            !hasUDA!(__traits(getMember, T, item), ignore) && // no ignore uda
+            !is(typeof(__traits(getMember, T, item)) == Relation);
     }
     else
         enum isField = false;
