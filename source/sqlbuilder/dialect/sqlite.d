@@ -528,11 +528,11 @@ private template getFieldType(T)
     alias RT = dbValueType!T;
     static if(is(RT == T))
     {
-        static if(isIntegral!T)
+        static if (isIntegral!T || isSomeChar!T || isBoolean!T)
             enum getFieldType = "INTEGER";
         else static if(canStringMarshal!T || isSomeString!T)
             enum getFieldType = "TEXT";
-        else static if(isFloating!T)
+        else static if(isFloatingPoint!T)
             enum getFieldType = "REAL";
         else static if(is(immutable(T) == immutable(Blob)))
             enum getFieldType = "BLOB";
