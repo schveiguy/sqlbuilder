@@ -4,7 +4,7 @@ public import sqlbuilder.dialect.common : where, changed, limit, orderBy,
            groupBy, exprCol, as, withoutAs, concat, count, ascend, descend,
            Parameter, simplifyConditions;
 
-import sqlbuilder.dialect.common : SQLImpl;
+private import sqlbuilder.dialect.common : SQLImpl, append;
 
 import sqlbuilder.types;
 import sqlbuilder.traits;
@@ -223,7 +223,7 @@ auto optional(T)(T val, bool isValid)
     return Parameter!(PType, true)(only(val.toPType), isValid);
 }
 
-alias _impl = SQLImpl!(PType, param);
+alias _impl = SQLImpl!(PType, param, true);
 
 static foreach(f; __traits(allMembers, _impl))
     mixin("alias " ~ f ~ " = _impl." ~ f ~ ";");
@@ -403,7 +403,7 @@ string sql(Item)(Insert!Item ins)
     put(app, `" (`);
     sqlPut!(false, false)(app, ins.colNames.expr);
     put(app, ") VALUES (");
-    sqlPut!(false, false)(app, ins.colValues.expr);
+    sqlPut!(false, true)(app, ins.colValues.expr);
     put(app, ")");
 
     return app.data;
@@ -419,21 +419,36 @@ string sql(Item)(Update!Item upd)
     assert(upd.joins.expr);
 
     // add a set of fragments given the prefix and the separator
-    void addFragment(bool includeTableQualifiers = true)(SQLFragment!(upd.ItemType) item, string prefix, string postfix = null)
+    void addFragment(SQLFragment!(upd.ItemType) item, string prefix, string postfix = null)
     {
         if(item.expr)
         {
             put(app, prefix);
-            sqlPut!(false, includeTableQualifiers)(app, item.expr);
+            sqlPut!(false, true)(app, item.expr);
             if(postfix.length)
                 put(app, postfix);
         }
     }
 
+    // first table
+    put(app, "UPDATE ");
+    app.sqlPut!(false, true)(upd.joins.expr.data[0]); // add the existing table
     // fields
-    addFragment(upd.joins, "UPDATE ");
-    // joins
-    addFragment!false(upd.settings, " SET ");
+    addFragment(upd.settings, " SET ");
+
+    // extra joins
+    if(upd.joins.expr.data.length > 1)
+    {
+        import std.algorithm : map;
+        // need to build an alternate expression string with "_" as the main table name.
+        static immutable string altTableName = "_".makeSpec(Spec.tableid);
+        auto altFrag = upd.joins;
+        auto origTable = upd.joins.expr.data[0];
+        altFrag.expr.data = [origTable, ` AS "_"`];
+        altFrag.expr.data.append(upd.joins.expr.data[1 .. $]
+                .map!(x => getSpec(x) == Spec.tableid && x[2 .. $] == origTable[2 .. $] ? altTableName : x));
+        addFragment(altFrag, " FROM ");
+    }
     // CONDITIONS
     addFragment(upd.conditions, " WHERE (", ")");
 

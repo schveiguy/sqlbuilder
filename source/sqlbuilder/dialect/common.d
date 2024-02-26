@@ -1064,7 +1064,10 @@ ConcatDef concat(Args...)(Args args) if (Args.length > 1)
 // template to implement all functions that require a specific parameter type.
 // Making this a template means we can swap out the type that is used as the
 // liason between the database library and our library.
-template SQLImpl(Item, alias param)
+//
+// NOTE: omitting the table id for update is a requirement for sqlite, and this
+// is somewhat of a hack but I can't think of a better way to do this.
+template SQLImpl(Item, alias param, bool noTableIdForUpdate = false)
 {
 
     // use ref counting to handle lifetime management for now
@@ -1148,7 +1151,13 @@ template SQLImpl(Item, alias param)
             upd.joins.addJoin(tbl);
         if(upd.settings.expr)
             upd.settings.expr ~= ", ";
-        upd.settings.expr ~= column.expr;
+        static if(noTableIdForUpdate)
+        {
+            import std.algorithm : filter;
+            upd.settings.expr.data.append(column.expr.data.filter!(ex => getSpec(ex) != Spec.tableid));
+        }
+        else
+            upd.settings.expr ~= column.expr;
         static if(!is(getParamType!(Col) == void))
             upd.colNames.params.append(col.params);
         upd.settings.expr ~= " = ";
