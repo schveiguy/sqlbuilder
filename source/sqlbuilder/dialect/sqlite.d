@@ -448,9 +448,18 @@ string sql(Item)(Update!Item upd)
         altFrag.expr.data.append(upd.joins.expr.data[1 .. $]
                 .map!(x => getSpec(x) == Spec.tableid && x[2 .. $] == origTable[2 .. $] ? altTableName : x));
         addFragment(altFrag, " FROM ");
+        put(app, ` WHERE "_"."id"=`);
+        app.sqlPut!(false, true)(origTable);
+        put(app, `."id"`);
+
+        // CONDITIONS
+        addFragment(upd.conditions, " AND (", ")");
     }
-    // CONDITIONS
-    addFragment(upd.conditions, " WHERE (", ")");
+    else
+    {
+        // CONDITIONS
+        addFragment(upd.conditions, " WHERE (", ")");
+    }
 
     return app.data;
 }
