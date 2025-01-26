@@ -1,0 +1,22 @@
+{
+	"authors": [
+		"Steven Schveighoffer"
+	],
+	"copyright": "Copyright © 2020, Steven Schveighoffer",
+	"dependencies": {
+		"d2sqlite3": {
+			"optional": true,
+			"version": ">=0.19.0"
+		},
+		"mysql-native": {
+			"optional": true,
+			"version": ">=3.2.4"
+		}
+	},
+    "subPackages": [
+        "./example"
+    ],
+	"description": "A library to aid in querying databases",
+	"license": "Boost-1.0",
+	"name": "sqlbuilder"
+}

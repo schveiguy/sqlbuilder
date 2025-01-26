@@ -1,0 +1,15 @@
+{
+	"authors": [
+		"Steven Schveighoffer"
+	],
+	"copyright": "Copyright © 2025, Steven Schveighoffer",
+	"dependencies": {
+		"d2sqlite3": "~>1.0.0",
+        "sqlbuilder" : {
+            "path": "../"
+        }
+	},
+	"description": "An example using D book data, and sqlite",
+	"license": "BSL-1.0",
+	"name": "bookdata"
+}

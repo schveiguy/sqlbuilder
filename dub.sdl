@@ -1,7 +1,0 @@
-name "sqlbuilder"
-description "A library to aid in querying databases"
-authors "Steven Schveighoffer"
-copyright "Copyright © 2020, Steven Schveighoffer"
-license "Boost-1.0"
-dependency "mysql-native" version=">=3.2.4" optional=true
-dependency "d2sqlite3" version=">=0.19.0" optional=true

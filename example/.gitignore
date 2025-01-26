@@ -1,0 +1,17 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/bookdata
+bookdata.so
+bookdata.dylib
+bookdata.dll
+bookdata.a
+bookdata.lib
+bookdata-test-*
+books.sqlite
+*.exe
+*.pdb
+*.o
+*.obj
+*.lst
