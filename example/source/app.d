@@ -4,6 +4,7 @@ import sqlbuilder.uda;
 import sqlbuilder.types;
 import sqlbuilder.dialect.sqlite;
 import d2sqlite3;
+import std.datetime.date;
 
 // Example of a custom serialized type from the database. This is a boolean
 // value which is stored in the database as a string of "Y" or "N".
@@ -42,6 +43,7 @@ struct book
 {
     @unique @colName("name") @colType("VARCHAR(100)") string title;
     @refersTo!Author("author", Spec.innerJoin) @colName("auth_id") int author_id;
+    Date published;
     BookType book_type;
     @primaryKey @autoIncrement int id = -1;
 }
@@ -159,6 +161,61 @@ int main(string[] args)
 
         foreach(ref rev; reviews)
             db.create(rev);
+
+        return 0;
+    }
+
+    auto db = Database(datafilename);
+
+    args = args[1 .. $];
+
+    // function to match commands
+    bool matchCommand(string[] commands...)
+    {
+        if(args.length < commands.length)
+            return false;
+        import std.uni;
+        import std.algorithm.comparison;
+        foreach(i; 0 .. commands.length)
+        {
+            if(!equal(commands[i], args[i].asLowerCase))
+                return false;
+        }
+        args = args[commands.length .. $];
+        return true;
+    }
+    DataSet!book bds;
+
+    // else, we are going to run a query
+    // command: books by <name>
+    if(matchCommand("books", "by"))
+    {
+        // fetch all books ordered by title, which match the given author name.
+        auto query = select(bds)
+                    .where("(", bds.author.firstName, ` LIKE "%" || `, args[0].param, ` || "%") OR (`,
+                        bds.author.lastName, ` LIKE "%" || `, args[0].param, ` || "%")`)
+                    .orderBy(bds.title);
+        writeln(db.fetch(query));
+    }
+    else if(matchCommand("books", "named"))
+    {
+        // fetch all books ordered by title, which match the given title.
+        auto query = select(bds)
+                    .where(bds.title, ` LIKE "%" || `, args[0].param, ` || "%"`)
+                    .orderBy(bds.title);
+        writeln(db.fetch(query));
+    }
+    else if(matchCommand("books"))
+    {
+        // just list all the books.
+        auto query = select(bds)
+            .orderBy(bds.title);
+        writeln(db.fetch(query));
+    }
+    else
+    {
+        writeln("unknown command: ", args);
+        return 1;
     }
     return 0;
 }
