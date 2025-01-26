@@ -10,7 +10,7 @@ For our design:
 - An Author will have first and last names
 - A Review will have a username, a text review and a rating.
 
-Then will will populate the data with all the D books, and make up some reviews.
+Then we will populate the data with all the D books, and make up some reviews.
 
 And finally, we will run queries on that data based on a CLI.
 
