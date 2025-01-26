@@ -87,7 +87,7 @@ int main(string[] args)
                   ),
             Author(
                     firstName: "Ali",
-                    lastName: "Cehreli"
+                    lastName: "Çehreli"
                   ),
             Author(
                     firstName: "Charles",
@@ -104,27 +104,32 @@ int main(string[] args)
             book(
                     title: "The D Programming Language",
                     author_id: authors[0].id,
-                    book_type: BookType.Reference
+                    book_type: BookType.Reference,
+                    published: Date(2010, 6, 2)
                 ),
             book(
                     title: "Modern C++ Design",
                     author_id: authors[0].id,
-                    book_type: BookType.Reference
+                    book_type: BookType.Reference,
+                    published: Date(2001, 2, 13)
                 ),
             book(
                     title: "Learning D",
                     author_id: authors[1].id,
-                    book_type: BookType.Reference
+                    book_type: BookType.Reference,
+                    published: Date(2015, 11, 30)
                 ),
             book(
                     title: "D Programming",
                     author_id: authors[2].id,
-                    book_type: BookType.Reference
+                    book_type: BookType.Reference,
+                    published: Date(2015, 12, 11)
                 ),
             book(
                     title: "A Tale of Two Languages",
                     author_id: authors[3].id,
-                    book_type: BookType.Fiction
+                    book_type: BookType.Fiction,
+                    published: Date(1859, 11, 1)
                 )
         ];
 
