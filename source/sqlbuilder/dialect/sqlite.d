@@ -1,6 +1,6 @@
 module sqlbuilder.dialect.sqlite;
 
-public import sqlbuilder.dialect.common : where, changed, limit, orderBy,
+public import sqlbuilder.dialect.common : changed, limit, orderBy,
            groupBy, exprCol, as, withoutAs, concat, count, ascend, descend,
            Parameter, simplifyConditions;
 

@@ -197,7 +197,7 @@ enum ConditionalJoiner
     or,
 }
 
-void updateConditions(Item, Spec...)(ref SQLFragment!Item conditions, ref Joins!Item joins, Spec spec) if (Spec.length > 0)
+void updateConditions(alias param, Item, Spec...)(ref SQLFragment!Item conditions, ref Joins!Item joins, Spec spec) if (Spec.length > 0)
 {
     // static
     foreach(s; spec)
@@ -236,11 +236,6 @@ void updateConditions(Item, Spec...)(ref SQLFragment!Item conditions, ref Joins!
     }
 }
 
-Q where(Q, Spec...)(Q query, Spec spec) if ((isQuery!Q || is(Q : Update!T, T) || is(Q : Delete!T, T)) && Spec.length > 0)
-{
-    updateConditions(query.conditions, query.joins, spec);
-    return query;
-}
 // This function simplifies the conditional expression string based on the
 // grouping tokens. This will eliminate empty groupings (and the separators
 // surrounding it), and also remove extraneous groupings.
@@ -1061,6 +1056,18 @@ ConcatDef concat(Args...)(Args args) if (Args.length > 1)
     return result;
 }
 
+// for unittests of this file without a dialect, provide a `where` function that lives outside the impl mixin.
+version(unittest)
+private Q where(Q, Spec...)(Q query, Spec spec) if ((isQuery!Q || is(Q : Update!T, T) || is(Q : Delete!T, T)) && Spec.length > 0)
+{
+    static void fakeParam(T)(T item){
+        static assert(false, "Cannot use implicit param with calls without using a dialect");
+    }
+    updateConditions!fakeParam(query.conditions, query.joins, spec);
+    return query;
+}
+
+
 // template to implement all functions that require a specific parameter type.
 // Making this a template means we can swap out the type that is used as the
 // liason between the database library and our library.
@@ -1069,6 +1076,12 @@ ConcatDef concat(Args...)(Args args) if (Args.length > 1)
 // is somewhat of a hack but I can't think of a better way to do this.
 template SQLImpl(Item, alias param, bool noTableIdForUpdate = false)
 {
+
+    Q where(Q, Spec...)(Q query, Spec spec) if ((isQuery!Q || is(Q : Update!T, T) || is(Q : Delete!T, T)) && Spec.length > 0)
+    {
+        updateConditions!param(query.conditions, query.joins, spec);
+        return query;
+    }
 
     // use ref counting to handle lifetime management for now
     auto select(Cols...)(Cols cols) if (cols.length == 0 || !isQuery!(Cols[0]))
@@ -1185,7 +1198,7 @@ template SQLImpl(Item, alias param, bool noTableIdForUpdate = false)
             {
                 static if(hasUDA!(__traits(getMember, T, fname), primaryKey))
                 {
-                    updateConditions(result.conditions, result.joins, __traits(getMember, ds, fname), " = ",
+                    updateConditions!param(result.conditions, result.joins, __traits(getMember, ds, fname), " = ",
                                           param(__traits(getMember, item, fname)));
                 }
                 else
@@ -1232,7 +1245,7 @@ template SQLImpl(Item, alias param, bool noTableIdForUpdate = false)
     {
         foreach(i, f; primaryKeyFields!(t.RowType))
         {
-            updateConditions(query.conditions, query.joins,
+            updateConditions!param(query.conditions, query.joins,
                  __traits(getMember, t, f), " = ", param(__traits(getMember, model, f)));
         }
         return query;
@@ -1267,7 +1280,7 @@ template SQLImpl(Item, alias param, bool noTableIdForUpdate = false)
     {
         foreach(i, f; primaryKeyFields!(t.RowType))
         {
-            updateConditions(query.conditions, query.joins,
+            updateConditions!param(query.conditions, query.joins,
                  __traits(getMember, t, f), " = ", param(args[i]));
         }
         return query;
