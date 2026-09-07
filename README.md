@@ -18,6 +18,7 @@ sqlbuilder is a small library that is used to make dynamically created sql easie
 * Deserialize automatically data from the database into the appropriate structs or types, generating a range of those types automatically.
 * Duck-typing of expressions, parameters, and table references that allows building one's own `DataSet`-like abstractions.
 * `ExprString` type which allows building of strings without utilizing too much extra allocation, and allows specialized tokens within the string to be recognized by the various dialects.
+* *NEW*: Where clauses support [IES](https://dlang.org/spec/istring.html).
 
 ## Planned features
 * Compile-time generation of SQL for queries without parameters.
