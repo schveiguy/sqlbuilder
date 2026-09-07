@@ -197,8 +197,27 @@ enum ConditionalJoiner
     or,
 }
 
-void updateConditions(Item, Spec...)(ref SQLFragment!Item conditions, ref Joins!Item joins, Spec spec) if (Spec.length > 0)
+// evaluates to a bool array which determies whether the parameter is nested in IES or not
+bool[] colorIes(Types...)()
 {
+    import core.interpolation;
+    assert(__ctfe);
+    bool[] result;
+    int ies = 0;
+    static foreach(t; Types)
+    {
+        static if(is(t == InterpolationHeader)) ++ies;
+        result ~= ies > 0;
+        static if(is(t == InterpolationFooter)) --ies;
+    }
+    return result;
+}
+
+void updateConditions(alias param, Item, Spec...)(ref SQLFragment!Item conditions, ref Joins!Item joins, Spec spec) if (Spec.length > 0)
+{
+    // if param is void, then no parameters can be added with this call
+    enum noParameters = is(param == void);
+    import core.interpolation;
     // static
     foreach(s; spec)
         static if(is(typeof(s.valid)))
@@ -212,12 +231,38 @@ void updateConditions(Item, Spec...)(ref SQLFragment!Item conditions, ref Joins!
     }
     else
         conditions.expr.addSep;
+
+    enum iesColors = colorIes!Spec();
     // static
     foreach(i, s; spec)
     {
         static if(is(typeof(s) : const(char)[]))
         {
-            conditions.expr ~= s;
+            static if(iesColors[i])
+            {
+                // inside IES, a string is a standard parameter
+                auto p = param(s);
+                conditions.expr ~= p.expr;
+                conditions.params.append(p.params);
+            }
+            else
+            {
+                // not inside IES
+                conditions.expr ~= s;
+            }
+        }
+        else static if(
+                is(typeof(s) == InterpolationHeader) ||
+                is(typeof(s) == InterpolationFooter) ||
+                is(typeof(s) == InterpolatedExpression!(Args), Args...)
+                )
+        {
+            // ignore
+        }
+        else static if(is(typeof(s) == InterpolatedLiteral!Args, Args...))
+        {
+            // inside IES, this is part of the string literal.
+            conditions.expr ~= s.toString;
         }
         else static if(is(typeof((() => s.expr)()) : const(char)[]) ||
                        is(typeof((() => s.expr)()) : const(ExprString)))
@@ -228,19 +273,22 @@ void updateConditions(Item, Spec...)(ref SQLFragment!Item conditions, ref Joins!
             static if(!is(getParamType!(typeof(s)) == void))
                 conditions.params.append(s.params);
         }
+        else static if(iesColors[i])
+        {
+            // in IES, and parameter is not a string.
+            auto p = param(s);
+            conditions.expr ~= p.expr;
+            conditions.params.append(p.params);
+        }
         else
         {
+            // not in IES, require a param call
             enum int pnum = i + 1;
             static assert(false, "Unsupported type for where clause: " ~ typeof(s).stringof ~ " (arg " ~ pnum.stringof ~ "), maybe try wrapping with `param`");
         }
     }
 }
 
-Q where(Q, Spec...)(Q query, Spec spec) if ((isQuery!Q || is(Q : Update!T, T) || is(Q : Delete!T, T)) && Spec.length > 0)
-{
-    updateConditions(query.conditions, query.joins, spec);
-    return query;
-}
 // This function simplifies the conditional expression string based on the
 // grouping tokens. This will eliminate empty groupings (and the separators
 // surrounding it), and also remove extraneous groupings.
@@ -1061,6 +1109,67 @@ ConcatDef concat(Args...)(Args args) if (Args.length > 1)
     return result;
 }
 
+// for unittests of this file without a dialect, provide a `where` function that lives outside the impl mixin.
+version(unittest)
+private Q where(Q, Spec...)(Q query, Spec spec) if ((isQuery!Q || is(Q : Update!T, T) || is(Q : Delete!T, T)) && Spec.length > 0)
+{
+    import std.variant : Variant;
+    import std.range : only;
+    static auto utParam(T)(T item) => Parameter!Variant(only(Variant(item)));
+    updateConditions!utParam(query.conditions, query.joins, spec);
+    return query;
+}
+
+// test IES clauses
+unittest
+{
+    import sqlbuilder.dataset;
+    static struct testDB
+    {
+        int x;
+        int y;
+        int z;
+    }
+
+    DataSet!testDB ds;
+
+    static auto mkexpr(Args...)(Args args)
+    {
+        ExprString result;
+        foreach(arg; args)
+        {
+            static if(is(typeof(arg) == string))
+                result ~= arg;
+            else
+                result ~= arg.expr;
+        }
+        return result;
+    }
+
+    import std.variant;
+    Query!Variant vq;
+
+    {
+        auto query = vq.select(ds)
+            .where(i"$(ds.x) = $(5)");
+        assert(query.conditions.expr ==
+                mkexpr(ds.x, " = ", paramSpec));
+        assert(query.conditions.params ==
+               [Variant(5)]);
+    }
+
+    {
+        int y = 2;
+        auto query = vq.select(ds)
+            .where(ds.x, i" = $(5) AND $(ds.y) = $(y)");
+        assert(query.conditions.expr ==
+                mkexpr(ds.x, " = ", paramSpec, " AND ", ds.y, " = ", paramSpec));
+        assert(query.conditions.params ==
+               [Variant(5), Variant(y)]);
+    }
+}
+
+
 // template to implement all functions that require a specific parameter type.
 // Making this a template means we can swap out the type that is used as the
 // liason between the database library and our library.
@@ -1069,6 +1178,12 @@ ConcatDef concat(Args...)(Args args) if (Args.length > 1)
 // is somewhat of a hack but I can't think of a better way to do this.
 template SQLImpl(Item, alias param, bool noTableIdForUpdate = false)
 {
+
+    Q where(Q, Spec...)(Q query, Spec spec) if ((isQuery!Q || is(Q : Update!T, T) || is(Q : Delete!T, T)) && Spec.length > 0)
+    {
+        updateConditions!param(query.conditions, query.joins, spec);
+        return query;
+    }
 
     // use ref counting to handle lifetime management for now
     auto select(Cols...)(Cols cols) if (cols.length == 0 || !isQuery!(Cols[0]))
@@ -1185,8 +1300,8 @@ template SQLImpl(Item, alias param, bool noTableIdForUpdate = false)
             {
                 static if(hasUDA!(__traits(getMember, T, fname), primaryKey))
                 {
-                    updateConditions(result.conditions, result.joins, __traits(getMember, ds, fname), " = ",
-                                          param(__traits(getMember, item, fname)));
+                    updateConditions!param(result.conditions, result.joins,
+                            i"$(__traits(getMember, ds, fname)) = $(__traits(getMember, item, fname))");
                 }
                 else
                 {
@@ -1232,8 +1347,8 @@ template SQLImpl(Item, alias param, bool noTableIdForUpdate = false)
     {
         foreach(i, f; primaryKeyFields!(t.RowType))
         {
-            updateConditions(query.conditions, query.joins,
-                 __traits(getMember, t, f), " = ", param(__traits(getMember, model, f)));
+            updateConditions!param(query.conditions, query.joins,
+                 i"$(__traits(getMember, t, f)) = $(__traits(getMember, model, f))");
         }
         return query;
     }
@@ -1267,9 +1382,10 @@ template SQLImpl(Item, alias param, bool noTableIdForUpdate = false)
     {
         foreach(i, f; primaryKeyFields!(t.RowType))
         {
-            updateConditions(query.conditions, query.joins,
-                 __traits(getMember, t, f), " = ", param(args[i]));
+            updateConditions!param(query.conditions, query.joins,
+                 i"$(__traits(getMember, t, f)) = $(args[i])");
         }
         return query;
     }
 }
+
